@@ -14,6 +14,7 @@ type Config struct {
 	RetentionDays  int
 	NewsSegments   int
 	MusicTracks    int
+	NewsSpeechMaxChars int
 	TTSVoiceNews   string
 	TTSVoiceIntro  string
 	TrackIntros    bool
@@ -39,6 +40,7 @@ func Load() *Config {
 		RetentionDays:  envInt("RETENTION_DAYS", 30),
 		NewsSegments:   envInt("NEWS_SEGMENTS", 10),
 		MusicTracks:    envInt("MUSIC_TRACKS", 10),
+		NewsSpeechMaxChars: envInt("NEWS_SPEECH_MAX_CHARS", 500),
 		TTSVoiceNews:   env("TTS_VOICE_NEWS", "el-GR-AthinaNeural"),
 		TTSVoiceIntro:  env("TTS_VOICE_INTRO", "el-GR-NestorasNeural"),
 		TrackIntros:    envBool("TRACK_INTROS", true),

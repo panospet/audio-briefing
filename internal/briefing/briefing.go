@@ -149,8 +149,8 @@ func (g *Generator) Generate(ctx context.Context, slot string) (Playlist, error)
 func (g *Generator) buildTriplet(ctx context.Context, dir, date, slot string, i int, ni news.Item, tr music.Track) ([]Item, bool) {
 	var items []Item
 
-	// News (speech + loudnorm).
-	newsBytes, err := g.TTS.Synthesize(ctx, ni.SummaryText, g.Cfg.TTSVoiceNews)
+	// News (speech + loudnorm). Speak a short lead, not the full summary.
+	newsBytes, err := g.TTS.Synthesize(ctx, truncateLead(ni.SummaryText, g.Cfg.NewsSpeechMaxChars), g.Cfg.TTSVoiceNews)
 	if err != nil {
 		log.Printf("[briefing] tts news %d failed: %v", i, err)
 		return nil, false
@@ -252,6 +252,25 @@ func buildIntroText(tr music.Track) string {
 
 func urlFor(date, slot, file string) string {
 	return fmt.Sprintf("/audio/%s/%s/%s", date, slot, file)
+}
+
+// truncateLead shortens text to at most maxChars runes, cutting at the last
+// sentence boundary so we never speak a sentence fragment.
+func truncateLead(text string, maxChars int) string {
+	runes := []rune(text)
+	if maxChars <= 0 || len(runes) <= maxChars {
+		return text
+	}
+	cut := maxChars
+	for i := maxChars - 1; i >= maxChars/2; i-- {
+		switch runes[i] {
+		case '.', '!', '?', ';', '…':
+			cut = i + 1
+			goto done
+		}
+	}
+done:
+	return strings.TrimSpace(string(runes[:cut]))
 }
 
 func dur(path string) float64 {
