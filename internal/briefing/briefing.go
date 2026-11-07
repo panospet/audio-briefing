@@ -114,6 +114,11 @@ func (g *Generator) Generate(ctx context.Context, slot string) (Playlist, error)
 
 	var items []Item
 	for i := 0; i < n; i++ {
+		// Pause between segments so the ~20 TTS requests don't fire back-to-back
+		// and trip Microsoft's rate limit (which lets ~8 burst through).
+		if i > 0 {
+			time.Sleep(time.Duration(g.Cfg.TTSPauseSeconds) * time.Second)
+		}
 		triplet, ok := g.buildTriplet(ctx, tmpDir, date, slot, i, newsItems[i], tracks[i])
 		if !ok {
 			log.Printf("[briefing] skipping segment %d (a step failed)", i)
