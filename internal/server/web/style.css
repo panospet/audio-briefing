@@ -1,0 +1,101 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --line: #242936;
+  --text: #e6e9f0;
+  --muted: #8b93a7;
+  --accent: #4f8cff;
+  --active: #1d2637;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.45;
+}
+
+header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+
+h1 { font-size: 20px; margin: 0 0 12px; }
+
+.controls-row { display: flex; gap: 10px; flex-wrap: wrap; }
+
+select, button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+button { cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+
+main { max-width: 720px; margin: 0 auto; padding: 16px 20px 60px; }
+
+#player {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  position: sticky;
+  top: 88px;
+  z-index: 5;
+}
+
+#now-playing {
+  font-size: 15px;
+  margin-bottom: 10px;
+  min-height: 1.4em;
+}
+
+.player-controls { display: flex; align-items: center; gap: 10px; }
+
+.seek-wrap { flex: 1; display: flex; align-items: center; gap: 8px; }
+.seek-wrap input[type=range] { flex: 1; }
+
+.volume-wrap { display: flex; align-items: center; gap: 6px; }
+
+#seek, #volume { accent-color: var(--accent); }
+
+#playlist { list-style: none; margin: 16px 0 0; padding: 0; }
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.item:hover { background: var(--panel); }
+.item.active { background: var(--active); border-left: 3px solid var(--accent); }
+
+.item .icon { font-size: 18px; width: 24px; }
+.item .meta { flex: 1; min-width: 0; }
+.item .title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item .subtitle { font-size: 13px; color: var(--muted); }
+.item .dur { color: var(--muted); font-size: 13px; }
+
+.muted { color: var(--muted); }
+
+footer {
+  text-align: center;
+  padding: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+input[type=range] { height: 4px; }
