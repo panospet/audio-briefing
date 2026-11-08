@@ -61,14 +61,26 @@ An autonomous personal audio briefing and music podcast generator written in Go 
 6. **Atomic Publishing**:
    - Build playlist and files inside `finalDir + ".tmp" + nano`.
    - Only on full completion, rename `os.Rename(tmpDir, finalDir)`, update `latest.json`, and prune historical briefings older than `RETENTION_DAYS` (30 days).
+   - `latest.json` writes are atomic (`.tmp` + rename) and monotonic: a slot is only promoted if it orders newer than the current pointer (`CompareBriefingOrder`); it never regresses to an older briefing.
+   - Retention never deletes the day currently being published (`cleanup(currentDate)`), and dates are parsed in Athens, not UTC.
+   - On startup, `briefing.CleanupTmpDirs(baseDir)` removes orphaned `*.tmp*` dirs/files left by interrupted runs.
+7. **Status & Alerting (`internal/briefing`)**:
+   - Generation state is owned by the `Generator` (`TryStart`/`Status`/`Wait` `WaitGroup`), shared by server, scheduler, and API — never duplicate state per caller.
+   - Failed or degraded (fewer than target segments) runs send a Telegram alert when `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are set; never log secrets.
+   - `POST /api/generate` must use `GenerateStarted` paired with `TryStart` (response is 409 when busy).
 
 ## Development & Testing
+
+- **Dependencies**: stdlib only — `go.mod` declares no external modules. Do not add third-party packages unless the user explicitly asks.
+- All env vars with defaults are documented in `.env.example` (protect `.env` — it is gitignored; never commit real secrets).
+- Unit tests live next to the code: `internal/{briefing,music,scheduler,server}/*_test.go`.
 
 ```bash
 # Run unit tests:
 go test ./...
 
-# Build binary:
+# Vet + build binary:
+go vet ./...
 go build -o briefing cmd/briefing/main.go
 
 # Run locally:
@@ -84,3 +96,5 @@ go run cmd/briefing/main.go
 - Preserve the triplet structure: `[news] -> [intro] -> [music]`.
 - Keep ffmpeg arguments strictly separated between speech (with loudnorm) and music (without loudnorm).
 - Any filesystem writes must stay inside `AUDIO_BASE_DIR` (`isWithinBaseDir` security check).
+- Commit messages follow Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`), one clean commit per logical task.
+- Timezone logic must use `briefing.Athens` (exported `time.Location`), never `time.Local`.

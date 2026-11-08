@@ -134,7 +134,7 @@ All endpoints (except `/healthz`) require HTTP Basic Authentication (`AUTH_USERN
 | `GET` | `/api/briefings` | Lists all available generated briefings grouped by date and slot |
 | `GET` | `/api/briefing?date=YYYY-MM-DD&slot=morning\|evening` | Retrieves `playlist.json` for a specific date and slot |
 | `GET` | `/api/status` | Current generator status (`idle`, `running`, `error`), last run timestamp, last error |
-| `POST`| `/api/generate?slot=morning\|evening` | Triggers background generation for a slot (requires same-origin / fetch header) |
+| `POST`| `/api/generate?slot=morning\|evening` | Triggers background generation for a slot (requires same-origin / fetch header; `403` cross-origin, `409` if already running) |
 
 #### Example `playlist.json` Schema:
 ```json
@@ -172,9 +172,19 @@ All endpoints (except `/healthz`) require HTTP Basic Authentication (`AUTH_USERN
 }
 ```
 
+## 🔐 Security
+
+- **HTTP Basic Auth** with constant-time comparison for all endpoints except `GET /healthz`. The service refuses to start unless `AUTH_USERNAME`/`AUTH_PASSWORD` are set.
+- **Security headers** on every response: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and a strict Content-Security-Policy (`self`-only sources, no framing, no objects).
+- **Same-origin enforcement** on `POST /api/generate` (`Origin` host must match, plus `Sec-Fetch-Site`/`X-Requested-With` checks) to prevent CSRF from third-party sites.
+- **Path containment**: `/api/briefing`, `/api/latest` and `/audio/*` validate date/slot shape and deny any resolved path outside `AUDIO_BASE_DIR`.
+- **Hardened HTTP server**: read/header/idle timeouts to resist slow-loris style connections.
+
 ---
 
 ## ⚙️ Configuration & Environment Variables
+
+A complete, commented template covering every variable lives in **[`.env.example`](.env.example)** — copy it to `.env`, fill in the secrets, and pass it to the container or shell (`--env-file .env`).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -267,6 +277,10 @@ go run cmd/briefing/main.go
 Run all unit tests covering scheduling, subsonic clients, music track picking, and server handlers:
 ```bash
 go test ./... -v
+
+# Vet + build:
+go vet ./...
+go build ./...
 ```
 
 ---
