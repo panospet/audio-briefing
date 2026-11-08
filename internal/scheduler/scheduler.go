@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -21,14 +22,6 @@ var slotNames = []string{"morning", "evening"}
 // a tight 60-second retry loop.
 const retryAfter = 30 * time.Minute
 
-var athens = func() *time.Location {
-	loc, err := time.LoadLocation("Europe/Athens")
-	if err != nil {
-		return time.Local
-	}
-	return loc
-}()
-
 // Start runs the generation scheduler: it wakes every minute and generates a
 // slot once its time has passed for the day (same-day catch-up) and it has not
 // already been generated. A failed run backs off for retryAfter before the next
@@ -47,8 +40,16 @@ func Start(ctx context.Context, cfg *config.Config, gen *briefing.Generator) {
 				log.Println("[scheduler] stopped")
 				return
 			case <-ticker.C:
-				now := time.Now().In(athens)
+				now := time.Now().In(briefing.Athens)
 				nowMin := now.Hour()*60 + now.Minute()
+
+				eveningMin := -1
+				if len(cfg.ScheduleSlots) > 1 {
+					if em, err := parseHHMM(cfg.ScheduleSlots[1]); err == nil {
+						eveningMin = em
+					}
+				}
+
 				for i, slotTime := range cfg.ScheduleSlots {
 					name := slotName(i)
 					t, err := parseHHMM(slotTime)
@@ -58,6 +59,10 @@ func Start(ctx context.Context, cfg *config.Config, gen *briefing.Generator) {
 					}
 					if nowMin < t {
 						continue // slot time not reached today
+					}
+					// Do not catch up morning once the evening window has begun.
+					if name == "morning" && eveningMin >= 0 && nowMin >= eveningMin {
+						continue
 					}
 					if alreadyGenerated(cfg.BaseDir, name) {
 						continue
@@ -73,7 +78,7 @@ func Start(ctx context.Context, cfg *config.Config, gen *briefing.Generator) {
 					mu.Unlock()
 					log.Printf("[scheduler] triggering %s generation", name)
 					go func(slot string) {
-						if _, err := gen.Generate(context.Background(), slot); err != nil {
+						if _, err := gen.Generate(ctx, slot); err != nil {
 							log.Printf("[scheduler] %s generation failed (retry in ~%s): %v", slot, retryAfter, err)
 						}
 					}(name)
@@ -91,20 +96,21 @@ func slotName(i int) string {
 }
 
 func alreadyGenerated(baseDir, slot string) bool {
-	date := time.Now().In(athens).Format("2006-01-02")
+	date := time.Now().In(briefing.Athens).Format("2006-01-02")
 	_, err := os.Stat(filepath.Join(baseDir, date, slot, "playlist.json"))
 	return err == nil
 }
 
 func parseHHMM(s string) (int, error) {
+	s = strings.TrimSpace(s)
 	parts := strings.SplitN(s, ":", 2)
 	if len(parts) != 2 {
-		return 0, nil
+		return 0, fmt.Errorf("expected HH:MM, got %q", s)
 	}
 	h, err1 := strconv.Atoi(parts[0])
 	m, err2 := strconv.Atoi(parts[1])
 	if err1 != nil || err2 != nil || h < 0 || h > 23 || m < 0 || m > 59 {
-		return 0, nil
+		return 0, fmt.Errorf("invalid HH:MM %q", s)
 	}
 	return h*60 + m, nil
 }
