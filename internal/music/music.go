@@ -3,6 +3,7 @@ package music
 import (
 	"context"
 	"crypto/md5"
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -32,7 +35,7 @@ func NewNavidrome(baseURL, user, pass string) *Navidrome {
 
 func (n *Navidrome) auth() url.Values {
 	salt := make([]byte, 6)
-	_, _ = rand.Read(salt)
+	_, _ = cryptorand.Read(salt)
 	saltStr := hex.EncodeToString(salt)[:6]
 	hash := md5.Sum([]byte(n.pass + saltStr))
 	return url.Values{
@@ -41,14 +44,18 @@ func (n *Navidrome) auth() url.Values {
 	}
 }
 
-func (n *Navidrome) get(ctx context.Context, endpoint string, params url.Values) ([]byte, error) {
+func (n *Navidrome) buildURL(endpoint string, params url.Values) string {
 	q := n.auth()
 	for k, vs := range params {
 		for _, v := range vs {
 			q.Add(k, v)
 		}
 	}
-	u := fmt.Sprintf("%s/rest/%s?%s", n.baseURL, endpoint, q.Encode())
+	return fmt.Sprintf("%s/rest/%s?%s", n.baseURL, endpoint, q.Encode())
+}
+
+func (n *Navidrome) get(ctx context.Context, endpoint string, params url.Values) ([]byte, error) {
+	u := n.buildURL(endpoint, params)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -77,27 +84,36 @@ type Album struct {
 	Name      string  `json:"name"`
 	Artist    string  `json:"artist"`
 	Year      int     `json:"year"`
+	Genre     string  `json:"genre"`
 	Genres    []Genre `json:"genres"`
 	SongCount int     `json:"songCount"`
 }
 
 // Song is a track from getAlbum.
 type Song struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Artist   string `json:"artist"`
-	Album    string `json:"album"`
-	Track    int    `json:"track"`
-	Duration int    `json:"duration"`
-	Year     int    `json:"year"`
-	Suffix   string `json:"suffix"`
-	Path     string `json:"path"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Artist     string `json:"artist"`
+	Album      string `json:"album"`
+	Track      int    `json:"track"`
+	DiscNumber int    `json:"discNumber"`
+	PlayCount  int    `json:"playCount"`
+	Duration   int    `json:"duration"`
+	Year       int    `json:"year"`
+	Suffix     string `json:"suffix"`
+	Path       string `json:"path"`
+}
+
+type subsonicError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
 type subsonic struct {
-	Status     string      `json:"status"`
-	AlbumList2 albumList2  `json:"albumList2"`
-	Album      albumDetail `json:"album"`
+	Status     string        `json:"status"`
+	Error      subsonicError `json:"error"`
+	AlbumList2 albumList2    `json:"albumList2"`
+	Album      albumDetail   `json:"album"`
 }
 
 type albumList2 struct {
@@ -109,25 +125,55 @@ type albumDetail struct {
 	Name   string  `json:"name"`
 	Artist string  `json:"artist"`
 	Year   int     `json:"year"`
+	Genre  string  `json:"genre"`
 	Genres []Genre `json:"genres"`
 	Song   []Song  `json:"song"`
 }
 
-// AlbumsByYear returns albums released in the given year.
-func (n *Navidrome) AlbumsByYear(ctx context.Context, year, size int) ([]Album, error) {
-	data, err := n.get(ctx, "getAlbumList2", url.Values{
-		"type": {"byYear"}, "fromYear": {fmt.Sprint(year)}, "toYear": {fmt.Sprint(year)}, "size": {fmt.Sprint(size)},
-	})
-	if err != nil {
-		return nil, err
+func checkSubsonicStatus(endpoint string, s subsonic) error {
+	if s.Status != "" && s.Status != "ok" {
+		if s.Error.Message != "" {
+			return fmt.Errorf("navidrome %s failed (code %d): %s", endpoint, s.Error.Code, s.Error.Message)
+		}
+		return fmt.Errorf("navidrome %s status %q", endpoint, s.Status)
 	}
-	var res struct {
-		SubsonicResponse subsonic `json:"subsonic-response"`
+	return nil
+}
+
+// AlbumsByYear returns all albums released in the given year, paging in batches
+// of pageSize until exhausted.
+func (n *Navidrome) AlbumsByYear(ctx context.Context, year, pageSize int) ([]Album, error) {
+	if pageSize <= 0 || pageSize > 500 {
+		pageSize = 500
 	}
-	if err := json.Unmarshal(data, &res); err != nil {
-		return nil, err
+	var all []Album
+	for offset := 0; offset < 10000; offset += pageSize {
+		data, err := n.get(ctx, "getAlbumList2", url.Values{
+			"type":     {"byYear"},
+			"fromYear": {fmt.Sprint(year)},
+			"toYear":   {fmt.Sprint(year)},
+			"size":     {fmt.Sprint(pageSize)},
+			"offset":   {fmt.Sprint(offset)},
+		})
+		if err != nil {
+			return nil, err
+		}
+		var res struct {
+			SubsonicResponse subsonic `json:"subsonic-response"`
+		}
+		if err := json.Unmarshal(data, &res); err != nil {
+			return nil, err
+		}
+		if err := checkSubsonicStatus("getAlbumList2", res.SubsonicResponse); err != nil {
+			return nil, err
+		}
+		page := res.SubsonicResponse.AlbumList2.Album
+		all = append(all, page...)
+		if len(page) < pageSize {
+			break
+		}
 	}
-	return res.SubsonicResponse.AlbumList2.Album, nil
+	return all, nil
 }
 
 // GetAlbum returns the album and its songs.
@@ -142,15 +188,54 @@ func (n *Navidrome) GetAlbum(ctx context.Context, id string) (*Album, []Song, er
 	if err := json.Unmarshal(data, &res); err != nil {
 		return nil, nil, err
 	}
+	if err := checkSubsonicStatus("getAlbum", res.SubsonicResponse); err != nil {
+		return nil, nil, err
+	}
 	a := res.SubsonicResponse.Album
-	album := &Album{ID: a.ID, Name: a.Name, Artist: a.Artist, Year: a.Year, Genres: a.Genres}
+	album := &Album{ID: a.ID, Name: a.Name, Artist: a.Artist, Year: a.Year, Genre: a.Genre, Genres: a.Genres}
 	return album, a.Song, nil
 }
 
-// Download returns the original audio bytes for a song (Navidrome resolves the
-// real file location, so this is robust against on-disk renames).
-func (n *Navidrome) Download(ctx context.Context, songID string) ([]byte, error) {
-	return n.get(ctx, "download", url.Values{"id": {songID}})
+// DownloadToFile streams the original audio for songID directly to dstPath,
+// avoiding buffering full lossless files in RAM or writing to container /tmp.
+func (n *Navidrome) DownloadToFile(ctx context.Context, songID, dstPath string) error {
+	u := n.buildURL("download", url.Values{"id": {songID}})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := n.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("navidrome download: status %d", resp.StatusCode)
+	}
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ct, "application/json") || strings.Contains(ct, "xml") {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return fmt.Errorf("navidrome download returned error payload: %s", string(body))
+	}
+	f, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	nBytes, copyErr := io.Copy(f, resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(dstPath)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(dstPath)
+		return closeErr
+	}
+	if nBytes == 0 {
+		_ = os.Remove(dstPath)
+		return fmt.Errorf("navidrome download returned 0 bytes")
+	}
+	return nil
 }
 
 // ---------- Last.fm ----------
@@ -176,7 +261,7 @@ func (l *LastFM) TopTracks(ctx context.Context, artist string, limit int) ([]str
 	q.Set("api_key", l.apiKey)
 	q.Set("format", "json")
 	q.Set("limit", fmt.Sprint(limit))
-	u := "http://ws.audioscrobbler.com/2.0/?" + q.Encode()
+	u := "https://ws.audioscrobbler.com/2.0/?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -213,6 +298,7 @@ type Track struct {
 	Title    string
 	Artist   string
 	Album    string
+	AlbumID  string
 	Year     int
 	Genre    string
 	SongID   string
@@ -220,9 +306,10 @@ type Track struct {
 	Suffix   string
 }
 
-// SelectTracks picks up to n tracks: shuffle the year's albums, then pick the
-// "most famous" track per album via Last.fm (fallback: first track).
-func SelectTracks(ctx context.Context, nd *Navidrome, lf *LastFM, year, n int) ([]Track, error) {
+// SelectTracks picks up to n tracks: shuffle the year's albums (preferring
+// albums not in excludeAlbums and deduplicating by artist), then pick the
+// "most famous" track per album via Last.fm -> highest PlayCount -> first track.
+func SelectTracks(ctx context.Context, nd *Navidrome, lf *LastFM, year, n int, excludeAlbums map[string]bool) ([]Track, error) {
 	albums, err := nd.AlbumsByYear(ctx, year, 500)
 	if err != nil {
 		return nil, err
@@ -233,12 +320,31 @@ func SelectTracks(ctx context.Context, nd *Navidrome, lf *LastFM, year, n int) (
 
 	rand.Shuffle(len(albums), func(i, j int) { albums[i], albums[j] = albums[j], albums[i] })
 
-	var tracks []Track
+	// Partition into fresh albums first, recently-played albums as reserve.
+	var fresh, recent []Album
 	for _, al := range albums {
+		if excludeAlbums != nil && excludeAlbums[al.ID] {
+			recent = append(recent, al)
+		} else {
+			fresh = append(fresh, al)
+		}
+	}
+	ordered := append(fresh, recent...)
+
+	var tracks []Track
+	seenArtists := make(map[string]bool)
+	for _, al := range ordered {
 		if len(tracks) >= n {
 			break
 		}
+		artistKey := normalize(al.Artist)
+		if artistKey != "" && artistKey != "various artists" && seenArtists[artistKey] {
+			continue
+		}
 		if tr, ok := pickMostFamous(ctx, nd, lf, al); ok {
+			if artistKey != "" {
+				seenArtists[artistKey] = true
+			}
 			tracks = append(tracks, tr)
 		}
 	}
@@ -250,41 +356,87 @@ func pickMostFamous(ctx context.Context, nd *Navidrome, lf *LastFM, al Album) (T
 	if err != nil || len(songs) == 0 {
 		return Track{}, false
 	}
-	artist := al.Artist
-	if artist == "" && album != nil && album.Artist != "" {
-		artist = album.Artist
+	metaAlbum := al
+	if album != nil {
+		if metaAlbum.Artist == "" {
+			metaAlbum.Artist = album.Artist
+		}
+		if len(metaAlbum.Genres) == 0 && len(album.Genres) > 0 {
+			metaAlbum.Genres = album.Genres
+		}
+		if metaAlbum.Genre == "" && album.Genre != "" {
+			metaAlbum.Genre = album.Genre
+		}
 	}
 
-	sorted := append([]Song(nil), songs...)
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].Track != sorted[j].Track {
-			return sorted[i].Track < sorted[j].Track
-		}
-		return sorted[i].Title < sorted[j].Title
-	})
+	sorted := sortAlbumSongs(songs)
 
 	// 1. Last.fm match (first top track that appears on the album wins).
-	if lf != nil {
+	artist := metaAlbum.Artist
+	if (artist == "" || strings.EqualFold(artist, "Various Artists")) && sorted[0].Artist != "" {
+		artist = sorted[0].Artist
+	}
+	if lf != nil && artist != "" {
 		if top, err := lf.TopTracks(ctx, artist, 50); err == nil {
 			for _, name := range top {
 				for _, s := range sorted {
 					if matchTitle(name, s.Title) {
-						return toTrack(al, s), true
+						return toTrack(metaAlbum, s), true
 					}
 				}
 			}
 		}
 	}
 
-	// 2. Fallback: first track (by track number).
-	return toTrack(al, sorted[0]), true
+	// 2. Fallback: highest playCount on the album (if any track has been played).
+	bestIdx := -1
+	bestPlays := 0
+	for i, s := range sorted {
+		if s.PlayCount > bestPlays {
+			bestPlays = s.PlayCount
+			bestIdx = i
+		}
+	}
+	if bestIdx >= 0 {
+		return toTrack(metaAlbum, sorted[bestIdx]), true
+	}
+
+	// 3. Fallback: first track (by disc and track number).
+	return toTrack(metaAlbum, sorted[0]), true
+}
+
+func sortAlbumSongs(songs []Song) []Song {
+	sorted := append([]Song(nil), songs...)
+	sort.Slice(sorted, func(i, j int) bool {
+		di, dj := sorted[i].DiscNumber, sorted[j].DiscNumber
+		if di <= 0 {
+			di = 1
+		}
+		if dj <= 0 {
+			dj = 1
+		}
+		if di != dj {
+			return di < dj
+		}
+		ti, tj := sorted[i].Track, sorted[j].Track
+		// Place untagged (Track <= 0) after numbered tracks.
+		if (ti <= 0) != (tj <= 0) {
+			return ti > 0
+		}
+		if ti != tj {
+			return ti < tj
+		}
+		return sorted[i].Title < sorted[j].Title
+	})
+	return sorted
 }
 
 func toTrack(al Album, s Song) Track {
-	genre := ""
+	genre := al.Genre
 	if len(al.Genres) > 0 {
-		genre = al.Genres[0].Name
-		if genre == "" {
+		if al.Genres[0].Name != "" {
+			genre = al.Genres[0].Name
+		} else if al.Genres[0].Value != "" {
 			genre = al.Genres[0].Value
 		}
 	}
@@ -292,16 +444,24 @@ func toTrack(al Album, s Song) Track {
 	if year == 0 {
 		year = s.Year
 	}
+	artist := s.Artist
+	if artist == "" {
+		artist = al.Artist
+	}
 	return Track{
-		Title: s.Title, Artist: s.Artist, Album: al.Name, Year: year,
+		Title: s.Title, Artist: artist, Album: al.Name, AlbumID: al.ID, Year: year,
 		Genre: genre, SongID: s.ID, Duration: s.Duration, Suffix: s.Suffix,
 	}
 }
 
-// matchTitle compares two track titles case- and accent-insensitively.
+// matchTitle compares two track titles case-, accent-, punctuation-, and
+// parenthetical-suffix-insensitively.
 func matchTitle(a, b string) bool {
-	return normalize(a) == normalize(b)
+	na, nb := normalize(a), normalize(b)
+	return na != "" && na == nb
 }
+
+var parenSuffixRe = regexp.MustCompile(`\s*[\(\[][^\)\]]*[\)\]]`)
 
 var accentMap = map[rune]rune{
 	'ά': 'α', 'έ': 'ε', 'ή': 'η', 'ί': 'ι', 'ό': 'ο', 'ύ': 'υ', 'ώ': 'ω',
@@ -316,15 +476,25 @@ var accentMap = map[rune]rune{
 }
 
 func normalize(s string) string {
+	stripped := parenSuffixRe.ReplaceAllString(s, "")
+	if strings.TrimSpace(stripped) == "" {
+		stripped = s
+	}
 	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
+	lastSpace := true
+	for _, r := range strings.ToLower(stripped) {
 		if unicode.Is(unicode.Mn, r) {
 			continue
 		}
 		if m, ok := accentMap[r]; ok {
-			b.WriteRune(m)
-		} else {
+			r = m
+		}
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(r)
+			lastSpace = false
+		} else if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
 		}
 	}
 	return strings.TrimSpace(b.String())

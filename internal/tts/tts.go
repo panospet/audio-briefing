@@ -26,23 +26,25 @@ func NewClient(baseURL, user, pass string) *Client {
 	}
 }
 
-// Synthesize turns text into MP3 audio bytes using the given voice.
-// Chunking, XML-escaping, and edge-tts are handled by the voice-service.
-func (c *Client) Synthesize(ctx context.Context, text, voice string) ([]byte, error) {
+// Synthesize turns text into MP3 audio bytes using the given voice, returning
+// the audio bytes and the elapsed duration of the successful call so the caller
+// can distinguish fast disk-cache hits from real network syntheses.
+func (c *Client) Synthesize(ctx context.Context, text, voice string) ([]byte, time.Duration, error) {
 	reqBody, err := json.Marshal(map[string]string{
 		"type":  "text",
 		"text":  text,
 		"voice": voice,
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var lastErr error
 	for attempt := 1; attempt <= 2; attempt++ {
+		callStart := time.Now()
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/synthesize", bytes.NewReader(reqBody))
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if c.user != "" {
@@ -60,17 +62,19 @@ func (c *Client) Synthesize(ctx context.Context, text, voice string) ([]byte, er
 			resp.Body.Close()
 			if err != nil {
 				lastErr = err
+			} else if len(audio) == 0 {
+				lastErr = fmt.Errorf("voice-service returned empty audio")
 			} else {
-				return audio, nil
+				return audio, time.Since(callStart), nil
 			}
 		}
 		if attempt < 2 {
 			select {
 			case <-ctx.Done():
-				return nil, ctx.Err()
+				return nil, 0, ctx.Err()
 			case <-time.After(2 * time.Second):
 			}
 		}
 	}
-	return nil, lastErr
+	return nil, 0, lastErr
 }
