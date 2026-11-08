@@ -22,6 +22,11 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if cfg.AuthUsername == "" || cfg.AuthPassword == "" {
+		log.Fatal("AUTH_USERNAME and AUTH_PASSWORD environment variables are required")
+	}
+
+	briefing.CleanupTmpDirs(cfg.BaseDir)
 
 	gen := &briefing.Generator{
 		Cfg:       cfg,
@@ -31,10 +36,11 @@ func main() {
 		TTS:       tts.NewClient(cfg.VoiceServiceURL, cfg.AuthUsername, cfg.AuthPassword),
 	}
 
-	srv := server.New(cfg, gen)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	srv := server.New(cfg, gen)
+	srv.BaseCtx = ctx
 
 	scheduler.Start(ctx, cfg, gen)
 
@@ -48,8 +54,11 @@ func main() {
 
 	<-ctx.Done()
 	log.Println("shutting down…")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
-	_ = shutdownCtx
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("http shutdown error: %v", err)
+	}
+	gen.Wait()
 	log.Println("stopped")
 }
