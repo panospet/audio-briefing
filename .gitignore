@@ -1,5 +1,8 @@
 # Binaries
 /briefing
 
+# Env files
+.env
+
 # OS
 .DS_Store
