@@ -140,8 +140,24 @@
 
   function selectGenre(id) {
     if (!(id in variants) || id === activeGenre) return;
-    activeGenre = id;
     const arr = variants[id] || [];
+    const cur = (index >= 0 && index < items.length) ? items[index] : null;
+
+    // Switching while a news article is playing: keep the speech going. News
+    // items are identical across variants at the same indices, so swap the
+    // surrounding list in place and let the *next* item (intro/music) come from
+    // the new genre once the article finishes.
+    if (cur && cur.type === 'news' && index < arr.length) {
+      activeGenre = id;
+      items = arr;
+      render();
+      renderGenreBar();
+      save();
+      return;
+    }
+
+    // Otherwise (a song or intro is playing) stop and start the new genre fresh.
+    activeGenre = id;
     audio.pause();
     audio.removeAttribute('src');
     index = -1;
