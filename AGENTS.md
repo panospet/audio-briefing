@@ -49,7 +49,8 @@ An autonomous personal audio briefing and music podcast generator written in Go 
    - Sports news (`Category == "Αθλητισμός"`) is capped at at most 2 items and placed strictly at the tail of the briefing.
 3. **Music Curation (`internal/music`)**:
    - Queries albums from `releaseYear = 2026`.
-   - Shuffles albums and excludes albums present in the last 4 published briefings (`recentAlbumIDs`).
+   - Groups albums into curated genre buckets (`music.ClassifyGenre` + `DefaultGenres`); the web player gets one button per non-empty bucket and swaps music while news stays fixed.
+   - Shuffles albums (per bucket) and excludes albums present in the last 4 published briefings (`recentAlbumIDs`, which scans all variants).
    - Resolves track popularity: Last.fm top tracks match -> highest `playCount` on album -> first track.
    - Downloads audio directly to disk (`DownloadToFile`) rather than buffering full audio files in memory.
 4. **TTS Pacing & Cache Awareness**:

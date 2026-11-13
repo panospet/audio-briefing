@@ -24,21 +24,41 @@ import (
 
 // Item is one playable entry in a playlist.
 type Item struct {
-	ID       string  `json:"id"`
-	Type     string  `json:"type"`
-	Title    string  `json:"title"`
-	Subtitle string  `json:"subtitle,omitempty"`
-	AlbumID  string  `json:"album_id,omitempty"`
-	URL      string  `json:"url"`
-	Duration float64 `json:"duration"`
+	ID       string   `json:"id"`
+	Type     string   `json:"type"`
+	Title    string   `json:"title"`
+	Subtitle string   `json:"subtitle,omitempty"`
+	AlbumID  string   `json:"album_id,omitempty"`
+	URL      string   `json:"url"`
+	Duration float64  `json:"duration"`
+	Sources  []Source `json:"sources,omitempty"`
 }
 
-// Playlist is the JSON document served to the web player.
+// Source is one source article backing a news item.
+type Source struct {
+	Newspaper string `json:"newspaper"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+}
+
+// Playlist is the JSON document served to the web player. `Items` holds the
+// default genre variant (backward compatible); `Variants` holds additional
+// genre-specific item lists keyed by genre id; `Genres` lists the buttons to
+// render in display order.
 type Playlist struct {
-	Date    string `json:"date"`
-	Slot    string `json:"slot"`
-	Created string `json:"created"`
-	Items   []Item `json:"items"`
+	Date     string            `json:"date"`
+	Slot     string            `json:"slot"`
+	Created  string            `json:"created"`
+	Default  string            `json:"default,omitempty"`
+	Genres   []GenreOption     `json:"genres,omitempty"`
+	Items    []Item            `json:"items"`
+	Variants map[string][]Item `json:"variants,omitempty"`
+}
+
+// GenreOption is one music-category button in the player.
+type GenreOption struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 // Latest is the latest.json pointer.
@@ -159,17 +179,12 @@ func (g *Generator) GenerateStarted(ctx context.Context, slot string) (pl Playli
 		newsItems = selectDiverseNews(ns)
 	}
 
-	// Music (request 2x pool for fallback + exclude recent albums).
-	var tracks []music.Track
-	excludeAlbums := recentAlbumIDs(g.Cfg.BaseDir, 4)
-	desiredTracks := g.Cfg.MusicTracks * 2
-	if desiredTracks < 20 {
-		desiredTracks = 20
-	}
-	if ts, err := music.SelectTracks(ctx, g.Navidrome, g.LastFM, releaseYear, desiredTracks, excludeAlbums); err != nil {
-		log.Printf("[briefing] music selection failed for %s: %v", slot, err)
+	// Music: fetch the year's albums once, then curate per genre bucket.
+	var albums []music.Album
+	if al, err := g.Navidrome.AlbumsByYear(ctx, releaseYear, 500); err != nil {
+		log.Printf("[briefing] music album fetch failed for %s: %v", slot, err)
 	} else {
-		tracks = ts
+		albums = al
 	}
 
 	target := g.Cfg.NewsSegments
@@ -179,8 +194,41 @@ func (g *Generator) GenerateStarted(ctx context.Context, slot string) (pl Playli
 	if g.Cfg.MusicTracks > 0 && g.Cfg.MusicTracks < target {
 		target = g.Cfg.MusicTracks
 	}
-	if len(newsItems) == 0 || len(tracks) == 0 {
-		retErr = fmt.Errorf("nothing to generate: %d news, %d tracks", len(newsItems), len(tracks))
+
+	if len(newsItems) == 0 || len(albums) == 0 {
+		retErr = fmt.Errorf("nothing to generate: %d news, %d albums", len(newsItems), len(albums))
+		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) failed: %v", date, slot, retErr))
+		return Playlist{}, retErr
+	}
+
+	// Curate music per bucket (metadata only, before any TTS/download).
+	excludeAlbums := recentAlbumIDs(g.Cfg.BaseDir, 4)
+	buckets := music.GroupAlbumsByGenre(albums)
+
+	type variant struct {
+		id     string
+		label  string
+		tracks []music.Track
+	}
+	var variants []variant
+	variants = append(variants, variant{id: "mix", label: "Mix", tracks: g.selectVariantTracks(ctx, albums, target, excludeAlbums)})
+	for _, gb := range music.DefaultGenres {
+		if gb.ID == "mix" {
+			continue
+		}
+		pool := buckets[gb.ID]
+		if len(pool) == 0 {
+			continue
+		}
+		// Skip a redundant "other" button when every album is untagged (it would
+		// just duplicate the mix).
+		if gb.ID == "other" && len(pool) == len(albums) {
+			continue
+		}
+		variants = append(variants, variant{id: gb.ID, label: gb.Label, tracks: g.selectVariantTracks(ctx, pool, target, excludeAlbums)})
+	}
+	if len(variants) == 0 || len(variants[0].tracks) == 0 {
+		retErr = fmt.Errorf("music selection produced no tracks")
 		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) failed: %v", date, slot, retErr))
 		return Playlist{}, retErr
 	}
@@ -212,15 +260,9 @@ func (g *Generator) GenerateStarted(ctx context.Context, slot string) (pl Playli
 	}
 
 	var (
-		items        []Item
-		nonSportsIdx int
-		sportsIdx    int
-		trackIdx     int
-		segIdx       int
-		lastTTSCall  time.Duration
-		hadTTSCall   bool
+		lastTTSCall time.Duration
+		hadTTSCall  bool
 	)
-
 	pauseBeforeTTS := func() error {
 		if !hadTTSCall || lastTTSCall < 500*time.Millisecond || g.Cfg.TTSPauseSeconds <= 0 {
 			return nil
@@ -235,155 +277,47 @@ func (g *Generator) GenerateStarted(ctx context.Context, slot string) (pl Playli
 		}
 	}
 
-	nonSportsTarget := target - len(sportsNews)
-	if nonSportsTarget < 0 {
-		nonSportsTarget = 0
+	// Phase 1: synthesize the shared news clips once.
+	newsClips, err := g.buildNewsClips(ctx, tmpDir, date, slot, nonSportsNews, sportsNews, target, pauseBeforeTTS, &hadTTSCall, &lastTTSCall)
+	if err != nil {
+		retErr = err
+		return Playlist{}, retErr
+	}
+	if len(newsClips) == 0 {
+		retErr = fmt.Errorf("all news segments failed")
+		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) failed: %v", date, slot, retErr))
+		return Playlist{}, retErr
 	}
 
-	for segIdx < target && (nonSportsIdx < len(nonSportsNews) || sportsIdx < len(sportsNews)) && trackIdx < len(tracks) {
-		if err := ctx.Err(); err != nil {
+	// Phase 2: assemble each variant (news -> intro -> music) into its item list.
+	playlist := Playlist{
+		Date:     date,
+		Slot:     slot,
+		Created:  now.Format(time.RFC3339),
+		Default:  "mix",
+		Variants: map[string][]Item{},
+	}
+	for _, v := range variants {
+		if len(v.tracks) == 0 {
+			continue
+		}
+		items, err := g.assembleVariant(ctx, tmpDir, date, slot, v.id, newsClips, v.tracks, pauseBeforeTTS, &hadTTSCall, &lastTTSCall)
+		if err != nil {
 			retErr = err
 			return Playlist{}, retErr
 		}
-
-		// Step 1: Acquire a working news clip (non-sports first, then sports for the final slots).
-		var (
-			chosenNews news.Item
-			newsFile   string
-			newsOK     bool
-		)
-		trySynthesizeNews := func(ni news.Item) (string, bool, error) {
-			if err := pauseBeforeTTS(); err != nil {
-				return "", false, err
-			}
-			lead := truncateLead(ni.SummaryText, g.Cfg.NewsSpeechMaxChars)
-			newsBytes, callDur, err := g.TTS.Synthesize(ctx, lead, g.Cfg.TTSVoiceNews)
-			hadTTSCall = true
-			lastTTSCall = callDur
-			if err != nil {
-				log.Printf("[briefing] tts news (seg %d) failed: %v", segIdx, err)
-				return "", false, nil
-			}
-			nf := filepath.Join(tmpDir, fmt.Sprintf("news_%d.mp3", segIdx))
-			if !g.speechToFile(ctx, newsBytes, nf, segIdx) {
-				return "", false, nil
-			}
-			return nf, true, nil
+		if len(items) == 0 {
+			continue
 		}
-
-		if segIdx < nonSportsTarget {
-			for nonSportsIdx < len(nonSportsNews) {
-				ni := nonSportsNews[nonSportsIdx]
-				nonSportsIdx++
-				nf, ok, err := trySynthesizeNews(ni)
-				if err != nil {
-					retErr = err
-					return Playlist{}, retErr
-				}
-				if ok {
-					chosenNews = ni
-					newsFile = nf
-					newsOK = true
-					break
-				}
-			}
+		playlist.Genres = append(playlist.Genres, GenreOption{ID: v.id, Label: v.label})
+		if v.id == "mix" {
+			playlist.Items = items
+		} else {
+			playlist.Variants[v.id] = items
 		}
-		if !newsOK {
-			for sportsIdx < len(sportsNews) {
-				ni := sportsNews[sportsIdx]
-				sportsIdx++
-				nf, ok, err := trySynthesizeNews(ni)
-				if err != nil {
-					retErr = err
-					return Playlist{}, retErr
-				}
-				if ok {
-					chosenNews = ni
-					newsFile = nf
-					newsOK = true
-					break
-				}
-			}
-		}
-		if !newsOK {
-			break
-		}
-
-		// Step 2: Acquire a working music track from the track queue (without discarding the news clip).
-		var (
-			chosenTrack music.Track
-			musicFile   string
-			musicOK     bool
-		)
-		for trackIdx < len(tracks) {
-			tr := tracks[trackIdx]
-			trackIdx++
-			mf := filepath.Join(tmpDir, fmt.Sprintf("music_%d.mp3", segIdx))
-			if err := g.fetchAndTranscode(ctx, tmpDir, tr, mf, segIdx); err != nil {
-				log.Printf("[briefing] music (seg %d, song %s) failed: %v", segIdx, tr.SongID, err)
-				continue
-			}
-			chosenTrack = tr
-			musicFile = mf
-			musicOK = true
-			break
-		}
-		if !musicOK {
-			_ = os.Remove(newsFile)
-			break
-		}
-
-		// Append news item.
-		items = append(items, Item{
-			ID:       fmt.Sprintf("n%d", segIdx),
-			Type:     "news",
-			Title:    chosenNews.Topic,
-			Subtitle: chosenNews.Category,
-			URL:      urlFor(date, slot, fmt.Sprintf("news_%d.mp3", segIdx)),
-			Duration: dur(newsFile),
-		})
-
-		// Step 3: Optional track intro for the chosen track.
-		if g.Cfg.TrackIntros {
-			if err := pauseBeforeTTS(); err != nil {
-				retErr = err
-				return Playlist{}, retErr
-			}
-			introBytes, callDur, err := g.TTS.Synthesize(ctx, buildIntroText(chosenTrack), g.Cfg.TTSVoiceIntro)
-			hadTTSCall = true
-			lastTTSCall = callDur
-			if err == nil {
-				introFile := filepath.Join(tmpDir, fmt.Sprintf("intro_%d.mp3", segIdx))
-				if g.speechToFile(ctx, introBytes, introFile, segIdx) {
-					items = append(items, Item{
-						ID:       fmt.Sprintf("i%d", segIdx),
-						Type:     "intro",
-						Title:    chosenTrack.Title,
-						Subtitle: chosenTrack.Artist,
-						URL:      urlFor(date, slot, fmt.Sprintf("intro_%d.mp3", segIdx)),
-						Duration: dur(introFile),
-					})
-				}
-			} else {
-				log.Printf("[briefing] tts intro %d failed: %v (skipping intro)", segIdx, err)
-			}
-		}
-
-		// Append music item.
-		items = append(items, Item{
-			ID:       fmt.Sprintf("m%d", segIdx),
-			Type:     "music",
-			Title:    chosenTrack.Title,
-			Subtitle: chosenTrack.Artist,
-			AlbumID:  chosenTrack.AlbumID,
-			URL:      urlFor(date, slot, fmt.Sprintf("music_%d.mp3", segIdx)),
-			Duration: dur(musicFile),
-		})
-
-		segIdx++
 	}
 
-	if len(items) == 0 {
+	if len(playlist.Items) == 0 {
 		retErr = fmt.Errorf("all segments failed")
 		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) failed: %v", date, slot, retErr))
 		return Playlist{}, retErr
@@ -394,12 +328,6 @@ func (g *Generator) GenerateStarted(ctx context.Context, slot string) (pl Playli
 		return Playlist{}, retErr
 	}
 
-	playlist := Playlist{
-		Date:    date,
-		Slot:    slot,
-		Created: now.Format(time.RFC3339),
-		Items:   items,
-	}
 	if err := writeJSON(filepath.Join(tmpDir, "playlist.json"), playlist); err != nil {
 		retErr = err
 		return Playlist{}, retErr
@@ -416,12 +344,176 @@ func (g *Generator) GenerateStarted(ctx context.Context, slot string) (pl Playli
 	writeLatest(g.Cfg.BaseDir, date, slot)
 	g.cleanup(date)
 
-	if segIdx < target {
-		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) published degraded: %d/%d triplets", date, slot, segIdx, target))
+	triplets := 0
+	for _, it := range playlist.Items {
+		if it.Type == "news" {
+			triplets++
+		}
+	}
+	if triplets < target {
+		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) published degraded: %d/%d triplets", date, slot, triplets, target))
 	}
 
-	log.Printf("[briefing] generated %s: %d items (%d triplets) -> %s", slot, len(items), segIdx, finalDir)
+	log.Printf("[briefing] generated %s: %d variants, %d items (%d triplets) -> %s", slot, len(playlist.Genres), len(playlist.Items), triplets, finalDir)
 	return playlist, nil
+}
+
+// selectVariantTracks selects a fallback pool (2x target, min 20, capped to the
+// bucket size) of tracks for one genre bucket. Metadata-only; audio is
+// downloaded later during assembly.
+func (g *Generator) selectVariantTracks(ctx context.Context, pool []music.Album, target int, excludeAlbums map[string]bool) []music.Track {
+	desired := target * 2
+	if desired < 20 {
+		desired = 20
+	}
+	if len(pool) < desired {
+		desired = len(pool)
+	}
+	ts, err := music.SelectTracksFromAlbums(ctx, g.Navidrome, g.LastFM, pool, desired, excludeAlbums)
+	if err != nil {
+		log.Printf("[briefing] music selection failed: %v", err)
+		return nil
+	}
+	return ts
+}
+
+// buildNewsClips synthesizes up to `target` shared news clips (non-sports first,
+// then up to 2 sports at the tail). Returns the assembled playlist items.
+func (g *Generator) buildNewsClips(ctx context.Context, tmpDir, date, slot string, nonSports, sports []news.Item, target int, pause func() error, hadTTSCall *bool, lastTTSCall *time.Duration) ([]Item, error) {
+	nonSportsTarget := target - len(sports)
+	if nonSportsTarget < 0 {
+		nonSportsTarget = 0
+	}
+	var items []Item
+	nonSportsIdx, sportsIdx, segIdx := 0, 0, 0
+
+	choose := func() (news.Item, bool) {
+		if segIdx < nonSportsTarget {
+			for nonSportsIdx < len(nonSports) {
+				ni := nonSports[nonSportsIdx]
+				nonSportsIdx++
+				return ni, true
+			}
+		}
+		for sportsIdx < len(sports) {
+			ni := sports[sportsIdx]
+			sportsIdx++
+			return ni, true
+		}
+		return news.Item{}, false
+	}
+
+	for segIdx < target {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		ni, ok := choose()
+		if !ok {
+			break
+		}
+		if err := pause(); err != nil {
+			return nil, err
+		}
+		lead := truncateLead(ni.SummaryText, g.Cfg.NewsSpeechMaxChars)
+		newsBytes, callDur, err := g.TTS.Synthesize(ctx, lead, g.Cfg.TTSVoiceNews)
+		*hadTTSCall = true
+		*lastTTSCall = callDur
+		if err != nil {
+			log.Printf("[briefing] tts news (seg %d) failed: %v", segIdx, err)
+			continue
+		}
+		nf := filepath.Join(tmpDir, fmt.Sprintf("news_%d.mp3", segIdx))
+		if !g.speechToFile(ctx, newsBytes, nf, segIdx) {
+			continue
+		}
+		sources := make([]Source, 0, len(ni.Sources))
+		for _, s := range ni.Sources {
+			sources = append(sources, Source{Newspaper: s.Newspaper, Title: s.Title, URL: s.URL})
+		}
+		items = append(items, Item{
+			ID:       fmt.Sprintf("n%d", segIdx),
+			Type:     "news",
+			Title:    ni.Topic,
+			Subtitle: ni.Category,
+			URL:      urlFor(date, slot, fmt.Sprintf("news_%d.mp3", segIdx)),
+			Duration: dur(nf),
+			Sources:  sources,
+		})
+		segIdx++
+	}
+	return items, nil
+}
+
+// assembleVariant interleaves the shared news clips with one genre's intro and
+// music tracks, writing audio files into tmpDir. It skips tracks that fail to
+// download/transcode, stopping the variant early when the pool is exhausted.
+func (g *Generator) assembleVariant(ctx context.Context, tmpDir, date, slot, genre string, newsClips []Item, tracks []music.Track, pause func() error, hadTTSCall *bool, lastTTSCall *time.Duration) ([]Item, error) {
+	var items []Item
+	trackIdx := 0
+	for i := 0; i < len(newsClips); i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// Find the next track that downloads + transcodes successfully.
+		var (
+			tr music.Track
+			mf string
+			ok bool
+		)
+		for trackIdx < len(tracks) {
+			cand := tracks[trackIdx]
+			trackIdx++
+			path := filepath.Join(tmpDir, fmt.Sprintf("music_%s_%d.mp3", genre, i))
+			if err := g.fetchAndTranscode(ctx, tmpDir, cand, path, i); err != nil {
+				log.Printf("[briefing] music (genre %s, seg %d, song %s) failed: %v", genre, i, cand.SongID, err)
+				continue
+			}
+			tr = cand
+			mf = path
+			ok = true
+			break
+		}
+		if !ok {
+			break
+		}
+
+		items = append(items, newsClips[i])
+
+		if g.Cfg.TrackIntros {
+			if err := pause(); err != nil {
+				return nil, err
+			}
+			introBytes, callDur, err := g.TTS.Synthesize(ctx, buildIntroText(tr), g.Cfg.TTSVoiceIntro)
+			*hadTTSCall = true
+			*lastTTSCall = callDur
+			if err == nil {
+				introFile := filepath.Join(tmpDir, fmt.Sprintf("intro_%s_%d.mp3", genre, i))
+				if g.speechToFile(ctx, introBytes, introFile, i) {
+					items = append(items, Item{
+						ID:       fmt.Sprintf("i%d", i),
+						Type:     "intro",
+						Title:    tr.Title,
+						Subtitle: tr.Artist,
+						URL:      urlFor(date, slot, fmt.Sprintf("intro_%s_%d.mp3", genre, i)),
+						Duration: dur(introFile),
+					})
+				}
+			} else {
+				log.Printf("[briefing] tts intro (genre %s, seg %d) failed: %v (skipping intro)", genre, i, err)
+			}
+		}
+
+		items = append(items, Item{
+			ID:       fmt.Sprintf("m%d", i),
+			Type:     "music",
+			Title:    tr.Title,
+			Subtitle: tr.Artist,
+			AlbumID:  tr.AlbumID,
+			URL:      urlFor(date, slot, fmt.Sprintf("music_%s_%d.mp3", genre, i)),
+			Duration: dur(mf),
+		})
+	}
+	return items, nil
 }
 
 // speechToFile writes TTS bytes and normalizes them to MP3 192k. If loudnorm
@@ -762,13 +854,22 @@ func recentAlbumIDs(baseDir string, limit int) map[string]bool {
 		if json.Unmarshal(data, &pl) != nil {
 			continue
 		}
-		for _, it := range pl.Items {
+		for _, it := range allItems(pl) {
 			if it.Type == "music" && it.AlbumID != "" {
 				out[it.AlbumID] = true
 			}
 		}
 	}
 	return out
+}
+
+// allItems returns every playable item across the default and genre variants.
+func allItems(pl Playlist) []Item {
+	items := append([]Item(nil), pl.Items...)
+	for _, v := range pl.Variants {
+		items = append(items, v...)
+	}
+	return items
 }
 
 func (g *Generator) notifyTelegram(ctx context.Context, text string) {

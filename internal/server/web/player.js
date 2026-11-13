@@ -17,6 +17,11 @@
   let briefingId = '';
   let polling = false;
 
+  let variants = {};      // genre id -> items array
+  let genreOrder = [];    // ordered genre ids for the button bar
+  let genreLabels = {};   // genre id -> display label
+  let activeGenre = null;
+
   const icons = { news: '📰', intro: '🎙️', music: '🎵' };
 
   function fmt(s) {
@@ -26,17 +31,12 @@
     return m + ':' + String(sec).padStart(2, '0');
   }
 
-  function slotRank(slot) {
-    return slot === 'evening' ? 2 : 1;
-  }
+  function slotRank(slot) { return slot === 'evening' ? 2 : 1; }
 
   function syncSelect() {
     if (!briefingId) return;
     for (const opt of selectEl.options) {
-      if (opt.value === briefingId) {
-        selectEl.value = briefingId;
-        break;
-      }
+      if (opt.value === briefingId) { selectEl.value = briefingId; break; }
     }
   }
 
@@ -74,62 +74,274 @@
     playBtn.textContent = '▶';
   }
 
+  function buildVariants(p) {
+    variants = {};
+    genreOrder = [];
+    genreLabels = {};
+    const def = p.default || 'mix';
+    variants[def] = p.items || [];
+    genreLabels[def] = def === 'mix' ? 'Mix' : def;
+    (p.genres || []).forEach(g => {
+      genreLabels[g.id] = g.label || g.id;
+      variants[g.id] = (g.id === def) ? (p.items || []) : ((p.variants && p.variants[g.id]) || []);
+      if (genreOrder.indexOf(g.id) < 0) genreOrder.push(g.id);
+    });
+    if (genreOrder.indexOf(def) < 0) genreOrder.unshift(def);
+  }
+
+  function chooseGenre() {
+    let savedGenre = null;
+    try {
+      const s = JSON.parse(localStorage.getItem('briefing') || 'null');
+      if (s && s.id === briefingId) savedGenre = s.genre;
+    } catch (e) {}
+    if (savedGenre && variants[savedGenre]) return savedGenre;
+    return genreOrder[0] || 'mix';
+  }
+
   function loadPlaylist(url, id) {
     resetPlayerState();
     fetch(url).then(r => {
       if (!r.ok) throw new Error('not found');
       return r.json();
     }).then(p => {
-      items = p.items || [];
       briefingId = id || (p.date && p.slot ? p.date + '/' + p.slot : (p.created || ''));
+      buildVariants(p);
+      activeGenre = chooseGenre();
+      items = variants[activeGenre] || [];
       syncSelect();
+      renderGenreBar();
       render();
-      if (items.length > 0) {
-        nowPlayingEl.textContent = 'Ready — press play.';
-      }
+      if (items.length > 0) nowPlayingEl.textContent = 'Ready — press play.';
       resume();
     }).catch(() => {
+      variants = {}; genreOrder = []; genreLabels = {}; activeGenre = null;
       items = [];
+      renderGenreBar();
       render();
       nowPlayingEl.textContent = 'No briefing yet — click "Generate now".';
     });
   }
 
-  function render() {
-    playlistEl.replaceChildren();
-    items.forEach((it, i) => {
-      const li = document.createElement('li');
-      li.className = 'item';
-      li.dataset.i = i;
-      const icon = document.createElement('span');
-      icon.className = 'icon';
-      icon.textContent = icons[it.type] || '•';
-      const meta = document.createElement('div');
-      meta.className = 'meta';
-      const title = document.createElement('div');
-      title.className = 'title';
-      title.textContent = it.title;
-      meta.appendChild(title);
-      if (it.subtitle) {
-        const sub = document.createElement('div');
-        sub.className = 'subtitle';
-        sub.textContent = it.subtitle;
-        meta.appendChild(sub);
-      }
-      const dur = document.createElement('span');
-      dur.className = 'dur';
-      dur.textContent = fmt(it.duration);
-      li.appendChild(icon);
-      li.appendChild(meta);
-      li.appendChild(dur);
-      li.addEventListener('click', () => play(i));
-      playlistEl.appendChild(li);
+  function renderGenreBar() {
+    const bar = document.getElementById('genre-bar');
+    if (!bar) return;
+    bar.replaceChildren();
+    if (genreOrder.length <= 1) { bar.style.display = 'none'; return; }
+    bar.style.display = '';
+    genreOrder.forEach(id => {
+      const b = document.createElement('button');
+      b.className = 'genre-btn' + (id === activeGenre ? ' active' : '');
+      b.textContent = genreLabels[id] || id;
+      b.addEventListener('click', () => selectGenre(id));
+      bar.appendChild(b);
     });
   }
 
+  function selectGenre(id) {
+    if (!(id in variants) || id === activeGenre) return;
+    activeGenre = id;
+    const arr = variants[id] || [];
+    audio.pause();
+    audio.removeAttribute('src');
+    index = -1;
+    seekEl.value = 0;
+    timeEl.textContent = '0:00';
+    totalEl.textContent = '0:00';
+    playBtn.textContent = '▶';
+    items = arr;
+    render();
+    renderGenreBar();
+    nowPlayingEl.classList.add('muted');
+    nowPlayingEl.textContent = arr.length ? 'Ready — press play.' : 'No tracks in this genre yet.';
+    save();
+  }
+
+  /* ---------- Grouping ---------- */
+  function groupIntoStories(its) {
+    const stories = [];
+    let cur = null;
+    its.forEach((it, i) => {
+      if (it.type === 'news') {
+        if (cur) stories.push(cur);
+        cur = { news: it, newsIndex: i, tracks: [] };
+      } else {
+        if (!cur) cur = { news: null, newsIndex: -1, tracks: [] };
+        cur.tracks.push({ item: it, index: i });
+      }
+    });
+    if (cur) stories.push(cur);
+    return stories;
+  }
+
+  /* ---------- Source list (all sources, no cap) ---------- */
+  function buildSourceList(srcs) {
+    const wrap = document.createElement('div');
+    const ul = document.createElement('ul');
+    wrap.appendChild(ul);
+
+    srcs.forEach((s) => {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      if (s.url) a.href = s.url;
+      const np = document.createElement('span');
+      np.className = 'newspaper';
+      np.textContent = (s.newspaper || '') + (s.newspaper && s.title ? ' — ' : '');
+      const tt = document.createElement('span');
+      tt.className = 'src-title';
+      tt.textContent = s.title || s.url || '';
+      a.appendChild(np);
+      a.appendChild(tt);
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+    return wrap;
+  }
+
+  /* ---------- Render ---------- */
+  function render() {
+    playlistEl.replaceChildren();
+    if (items.length === 0) return;
+
+    const stories = groupIntoStories(items);
+
+    stories.forEach((story, si) => {
+      const card = document.createElement('li');
+      card.className = 'story-card';
+      card.dataset.story = si;
+      if (story.newsIndex >= 0) {
+        card.dataset.first = story.newsIndex;
+        card.dataset.last = story.tracks.length
+          ? story.tracks[story.tracks.length - 1].index
+          : story.newsIndex;
+      }
+
+      // ---- Head ----
+      const head = document.createElement('div');
+      head.className = 'story-head';
+
+      const icon = document.createElement('span');
+      icon.className = 'story-icon';
+      icon.textContent = story.news ? (icons[story.news.type] || '•') : '•';
+
+      const meta = document.createElement('div');
+      meta.className = 'story-meta';
+      const title = document.createElement('div');
+      title.className = 'story-title';
+      title.textContent = story.news ? story.news.title : '—';
+      meta.appendChild(title);
+
+      const sub = document.createElement('div');
+      sub.className = 'story-sub';
+      if (story.news && story.news.subtitle) {
+        const badge = document.createElement('span');
+        badge.className = 'category-badge';
+        badge.textContent = story.news.subtitle;
+        sub.appendChild(badge);
+      }
+      if (story.news) {
+        const dur = document.createElement('span');
+        dur.textContent = fmt(story.news.duration);
+        sub.appendChild(dur);
+      }
+      meta.appendChild(sub);
+
+      const durEl = document.createElement('span');
+      durEl.className = 'story-dur';
+      durEl.textContent = story.news ? fmt(story.news.duration) : '';
+
+      const toggle = document.createElement('button');
+      toggle.className = 'src-toggle';
+      toggle.textContent = '▸';
+      toggle.title = 'Πηγές';
+      toggle.setAttribute('aria-label', 'Πηγές');
+
+      head.appendChild(icon);
+      head.appendChild(meta);
+      head.appendChild(durEl);
+      if (story.news && story.news.sources && story.news.sources.length) {
+        head.appendChild(toggle);
+      }
+      card.appendChild(head);
+
+      head.addEventListener('click', () => {
+        if (story.newsIndex >= 0) play(story.newsIndex);
+      });
+
+      // ---- Sources (expandable) ----
+      if (story.news && story.news.sources && story.news.sources.length) {
+        const srcWrap = document.createElement('div');
+        srcWrap.className = 'story-sources';
+        const inner = buildSourceList(story.news.sources);
+        srcWrap.appendChild(inner);
+        card.appendChild(srcWrap);
+
+        toggle.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const open = card.classList.toggle('sources-open');
+          toggle.classList.toggle('open', open);
+          toggle.textContent = open ? '▾' : '▸';
+        });
+      }
+
+      // ---- Tracks ----
+      if (story.tracks.length) {
+        const tracks = document.createElement('div');
+        tracks.className = 'story-tracks';
+        story.tracks.forEach(t => {
+          const row = document.createElement('div');
+          row.className = 'track-row';
+          row.dataset.i = t.index;
+          const ti = document.createElement('span');
+          ti.className = 'track-icon';
+          ti.textContent = icons[t.item.type] || '•';
+          const info = document.createElement('div');
+          info.className = 'track-info';
+          const tt = document.createElement('div');
+          tt.className = 'track-title';
+          tt.textContent = t.item.title;
+          info.appendChild(tt);
+          if (t.item.subtitle) {
+            const ts = document.createElement('div');
+            ts.className = 'track-sub';
+            ts.textContent = t.item.subtitle;
+            info.appendChild(ts);
+          }
+          const td = document.createElement('span');
+          td.className = 'track-dur';
+          td.textContent = fmt(t.item.duration);
+          row.appendChild(ti);
+          row.appendChild(info);
+          row.appendChild(td);
+          row.addEventListener('click', (e) => {
+            e.stopPropagation();
+            play(t.index);
+          });
+          tracks.appendChild(row);
+        });
+        card.appendChild(tracks);
+      }
+
+      playlistEl.appendChild(card);
+    });
+
+    highlight();
+  }
+
   function highlight() {
-    const lis = playlistEl.querySelectorAll('.item');
-    lis.forEach((li, i) => li.classList.toggle('active', i === index));
+    playlistEl.querySelectorAll('.track-row').forEach(row => {
+      const i = parseInt(row.dataset.i, 10);
+      row.classList.toggle('active', i === index);
+    });
+    playlistEl.querySelectorAll('.story-card').forEach(card => {
+      const first = parseInt(card.dataset.first, 10);
+      const last = parseInt(card.dataset.last, 10);
+      if (!isNaN(first) && !isNaN(last)) {
+        card.classList.toggle('active', index >= first && index <= last);
+      }
+    });
   }
 
   function play(i) {
@@ -138,10 +350,9 @@
     const it = items[index];
     audio.src = it.url;
     nowPlayingEl.textContent = (icons[it.type] || '') + ' ' + it.title;
+    nowPlayingEl.classList.remove('muted');
     highlight();
-    audio.play().catch(() => {
-      playBtn.textContent = '▶';
-    });
+    audio.play().catch(() => { playBtn.textContent = '▶'; });
     save();
   }
 
@@ -152,11 +363,9 @@
   }
 
   function save() {
-    if (!briefingId || index < 0) return;
+    if (!briefingId) return;
     try {
-      localStorage.setItem('briefing', JSON.stringify({
-        id: briefingId, index, time: audio.currentTime
-      }));
+      localStorage.setItem('briefing', JSON.stringify({ id: briefingId, index, time: audio.currentTime, genre: activeGenre }));
     } catch (e) {}
   }
 
@@ -168,6 +377,7 @@
         audio.src = items[index].url;
         audio.currentTime = saved.time || 0;
         nowPlayingEl.textContent = (icons[items[index].type] || '') + ' ' + items[index].title;
+        nowPlayingEl.classList.remove('muted');
         highlight();
       }
     } catch (e) {}
@@ -181,11 +391,8 @@
     else { playBtn.textContent = '▶'; }
   });
   audio.addEventListener('error', () => {
-    if (index >= 0 && index + 1 < items.length) {
-      play(index + 1);
-    } else {
-      playBtn.textContent = '▶';
-    }
+    if (index >= 0 && index + 1 < items.length) play(index + 1);
+    else { playBtn.textContent = '▶'; }
   });
   audio.addEventListener('timeupdate', () => {
     if (audio.duration) {
@@ -195,9 +402,7 @@
     }
     save();
   });
-  audio.addEventListener('loadedmetadata', () => {
-    totalEl.textContent = fmt(audio.duration);
-  });
+  audio.addEventListener('loadedmetadata', () => { totalEl.textContent = fmt(audio.duration); });
 
   playBtn.addEventListener('click', () => {
     if (items.length === 0) return;
@@ -223,19 +428,14 @@
     genBtn.disabled = true;
     genBtn.textContent = 'Generating…';
     let slot = 'morning';
-    if (selectEl.value && selectEl.value.includes('/evening')) {
-      slot = 'evening';
-    } else if (!selectEl.value && new Date().getHours() >= 18) {
-      slot = 'evening';
-    }
+    if (selectEl.value && selectEl.value.includes('/evening')) slot = 'evening';
+    else if (!selectEl.value && new Date().getHours() >= 18) slot = 'evening';
     try {
       const r = await fetch('/api/generate?slot=' + encodeURIComponent(slot), {
         method: 'POST',
         headers: { 'X-Requested-With': 'fetch' }
       });
-      if (!r.ok && r.status !== 409) {
-        throw new Error('request rejected');
-      }
+      if (!r.ok && r.status !== 409) throw new Error('request rejected');
       pollStatus();
     } catch (e) {
       genBtn.disabled = false;
@@ -257,6 +457,7 @@
             genBtn.textContent = '⟳ Generate now';
             if (s.state === 'error') {
               nowPlayingEl.textContent = 'Generation failed: ' + (s.last_error || '');
+              nowPlayingEl.classList.remove('muted');
             } else {
               await loadBriefings();
               loadPlaylist('/api/latest', '');
@@ -296,8 +497,6 @@
   });
 
   // init
-  loadBriefings().then(() => {
-    loadPlaylist('/api/latest', '');
-  });
+  loadBriefings().then(() => { loadPlaylist('/api/latest', ''); });
   checkInitialStatus();
 })();

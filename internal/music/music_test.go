@@ -64,6 +64,55 @@ func TestPickMostFamousPlayCountFallback(t *testing.T) {
 	}
 }
 
+func TestClassifyGenreBucketsMessyTags(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"Indie Rock", "rock"},
+		{"Synthpop", "pop"},
+		{"Indie Pop", "pop"}, // "indie pop" outranks generic "indie" -> rock
+		{"Hip-Hop/Rap", "hiphop"},
+		{"Smooth Jazz", "jazz"},
+		{"Electronica", "electronic"},
+		{"Dance", "electronic"},
+		{"Dance-Pop", "pop"},
+		{"Neoclassical", "classical"},
+		{"Λαϊκά", "world"},
+		{"Greek Folk", "world"},
+		{"", "other"},
+		{"Some Obscure Tag", "other"},
+	}
+	for _, c := range cases {
+		if got := ClassifyGenre(c.in); got != c.want {
+			t.Errorf("ClassifyGenre(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestGroupAlbumsByGenre(t *testing.T) {
+	albums := []Album{
+		{ID: "a1", Genre: "Indie Rock"},
+		{ID: "a2", Genres: []Genre{{Name: "Synthpop"}}},
+		{ID: "a3", Genre: "Jazz"},
+		{ID: "a4", Genre: ""},
+		{ID: "a5", Genre: "Heavy Metal"},
+	}
+	got := GroupAlbumsByGenre(albums)
+	if len(got["rock"]) != 2 {
+		t.Fatalf("expected 2 rock albums, got %d: %+v", len(got["rock"]), got["rock"])
+	}
+	if len(got["pop"]) != 1 || got["pop"][0].ID != "a2" {
+		t.Fatalf("expected 1 pop album a2, got %+v", got["pop"])
+	}
+	if len(got["jazz"]) != 1 || got["jazz"][0].ID != "a3" {
+		t.Fatalf("expected 1 jazz album a3, got %+v", got["jazz"])
+	}
+	if len(got["other"]) != 1 || got["other"][0].ID != "a4" {
+		t.Fatalf("expected 1 other album a4, got %+v", got["other"])
+	}
+}
+
 func TestSubsonicFailedStatusReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

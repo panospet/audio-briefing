@@ -22,9 +22,17 @@ var athens = func() *time.Location {
 
 // Item is one speech-ready news item from the dashboard's news block.
 type Item struct {
-	Topic       string `json:"topic"`
-	Category    string `json:"category"`
-	SummaryText string `json:"summary_text"`
+	Topic       string   `json:"topic"`
+	Category    string   `json:"category"`
+	SummaryText string   `json:"summary_text"`
+	Sources     []Source `json:"sources"`
+}
+
+// Source is one source article backing a news item.
+type Source struct {
+	Newspaper string `json:"newspaper"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
 }
 
 // Block mirrors the dashboard's stored news-block envelope.

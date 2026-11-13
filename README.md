@@ -72,7 +72,8 @@ The generation pipeline executes automatically twice per day (`08:00` morning an
                     ▼
   2. Select Music Tracks
      └── Queries Navidrome Subsonic API for albums from target release year (2026)
-     └── Shuffles albums, excluding albums played in the last 4 briefings
+     └── Groups albums into curated genre buckets (mix = all albums)
+     └── Shuffles each bucket, excluding albums played in the last 4 briefings
      └── Queries Last.fm for artist top tracks to match the "most famous" song
      └── Fallback: Highest play count on album -> First track
                     │
@@ -105,6 +106,7 @@ The generation pipeline executes automatically twice per day (`08:00` morning an
 - **Autonomous Scheduling with Catch-Up**: Scheduler wakes every 60 seconds. If a scheduled window has passed today and has not been generated, it triggers catch-up automatically. Failed runs apply a 30-minute backoff.
 - **Smart News Diversification**: Partitions news stories across topics, strictly limiting sports stories to at most 2 items and ordering them at the tail of the program.
 - **Intelligent Song Selection**: Combines local library metadata with Last.fm listener data to curate the most notable song from each album.
+- **Genre Channels**: Music is curated into buckets (`Mix`, `Electronic`, `Rock`, `Pop`, `Hip-Hop`, `Jazz`, `World`, `Classical`, `Other`). The web player renders one button per available genre; clicking swaps the interleaved music tracks while the news narration stays fixed.
 - **Smart TTS Pacing & Disk Cache Awareness**: Tracks `voice-service` call durations to distinguish immediate disk-cache hits (<500ms) from live network generation, inserting polite pauses (`TTS_PAUSE_SECONDS`) only when necessary to prevent upstream throttling.
 - **Broadcast-Standard Audio Normalization**:
   - News and introductions are normalized to `-16 LUFS` / `-1.5 dBFS TP` using ffmpeg's `loudnorm` filter.
@@ -142,6 +144,11 @@ All endpoints (except `/healthz`) require HTTP Basic Authentication (`AUTH_USERN
   "date": "2026-11-08",
   "slot": "morning",
   "created": "2026-11-08T08:00:15+02:00",
+  "default": "mix",
+  "genres": [
+    { "id": "mix", "label": "Mix" },
+    { "id": "electronic", "label": "Electronic" }
+  ],
   "items": [
     {
       "id": "n0",
@@ -156,7 +163,7 @@ All endpoints (except `/healthz`) require HTTP Basic Authentication (`AUTH_USERN
       "type": "intro",
       "title": "Solar Echoes",
       "subtitle": "Kite",
-      "url": "/audio/2026-11-08/morning/intro_0.mp3",
+      "url": "/audio/2026-11-08/morning/intro_mix_0.mp3",
       "duration": 4.2
     },
     {
@@ -165,12 +172,37 @@ All endpoints (except `/healthz`) require HTTP Basic Authentication (`AUTH_USERN
       "title": "Solar Echoes",
       "subtitle": "Kite",
       "album_id": "ab-1234",
-      "url": "/audio/2026-11-08/morning/music_0.mp3",
+      "url": "/audio/2026-11-08/morning/music_mix_0.mp3",
       "duration": 218.0
     }
-  ]
+  ],
+  "variants": {
+    "electronic": [
+      {
+        "id": "n0",
+        "type": "news",
+        "title": "Νέο νομοσχέδιο για τις συγκοινωνίες",
+        "subtitle": "Ελλάδα",
+        "url": "/audio/2026-11-08/morning/news_0.mp3",
+        "duration": 34.5
+      },
+      {
+        "id": "m0",
+        "type": "music",
+        "title": "Neon District",
+        "subtitle": "Lumen",
+        "album_id": "ab-9981",
+        "url": "/audio/2026-11-08/morning/music_electronic_0.mp3",
+        "duration": 204.0
+      }
+    ]
+  }
 }
 ```
+
+> `items` is the default (`mix`) variant. `variants` holds additional genre-specific item
+> lists keyed by genre id; each shares the same `news_*.mp3` files and only swaps the
+> interleaved intro/music. `genres` is the ordered list of buttons the player renders.
 
 ## 🔐 Security
 

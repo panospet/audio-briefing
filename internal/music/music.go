@@ -291,6 +291,90 @@ func (l *LastFM) TopTracks(ctx context.Context, artist string, limit int) ([]str
 	return names, nil
 }
 
+// ---------- Genre buckets ----------
+
+// GenreBucket is one curated music category surfaced in the web player.
+type GenreBucket struct {
+	ID    string
+	Label string
+}
+
+// DefaultGenres is the curated list of genre buckets in display order. The
+// "mix" bucket is special: it selects from every album regardless of genre.
+var DefaultGenres = []GenreBucket{
+	{ID: "mix", Label: "Mix"},
+	{ID: "electronic", Label: "Electronic"},
+	{ID: "rock", Label: "Rock"},
+	{ID: "pop", Label: "Pop"},
+	{ID: "hiphop", Label: "Hip-Hop"},
+	{ID: "jazz", Label: "Jazz"},
+	{ID: "world", Label: "World"},
+	{ID: "classical", Label: "Classical"},
+	{ID: "other", Label: "Other"},
+}
+
+// genreKeywords maps curated buckets to the messy tags that fall into them.
+// Matching is longest-keyword-wins so specific tags ("indie pop", "dance-pop")
+// outrank generic ones ("pop", "indie", "dance").
+var genreKeywords = []struct {
+	id   string
+	keys []string
+}{
+	{"classical", []string{"classical", "orchestral", "symphonic", "symphony", "soundtrack", "score", "chamber", "opera", "neoclassical", "modern classical"}},
+	{"jazz", []string{"jazz", "blues", "soul", "funk", "r&b", "rnb", "rhythm and blues", "swing", "bebop", "gospel"}},
+	{"hiphop", []string{"hip-hop", "hip hop", "hiphop", "rap", "trap", "grime"}},
+	{"electronic", []string{"electronic", "electronica", "electro", "edm", "house", "techno", "trance", "ambient", "dance", "drum and bass", "drum & bass", "dnb", "dubstep", "idm", "synthwave", "disco", "industrial", "breakbeat"}},
+	{"rock", []string{"rock", "metal", "punk", "indie", "alternative", "grunge", "post-punk", "hardcore", "emo", "shoegaze", "psychedelic", "post-rock", "folk rock"}},
+	{"pop", []string{"pop", "synthpop", "synth-pop", "electropop", "dance-pop", "dance pop", "indie pop", "dream pop", "k-pop", "j-pop"}},
+	{"world", []string{"world", "folk", "traditional", "greek", "greece", "laika", "λαϊκ", "entexno", "έντεχνο", "rebetiko", "ρεμπέτικο", "ethnic", "latin", "reggae", "afro", "african", "balkan", "country", "americana", "celtic", "fado", "flamenco"}},
+}
+
+// ClassifyGenre maps a raw genre tag to a curated bucket id, defaulting to
+// "other" when nothing matches.
+func ClassifyGenre(raw string) string {
+	g := strings.ToLower(strings.TrimSpace(raw))
+	if g == "" {
+		return "other"
+	}
+	best := ""
+	bestLen := 0
+	for _, grp := range genreKeywords {
+		for _, k := range grp.keys {
+			if strings.Contains(g, k) && len(k) > bestLen {
+				best = grp.id
+				bestLen = len(k)
+			}
+		}
+	}
+	if best == "" {
+		return "other"
+	}
+	return best
+}
+
+// albumGenre resolves an album's primary genre tag.
+func albumGenre(al Album) string {
+	if len(al.Genres) > 0 {
+		if al.Genres[0].Name != "" {
+			return al.Genres[0].Name
+		}
+		if al.Genres[0].Value != "" {
+			return al.Genres[0].Value
+		}
+	}
+	return al.Genre
+}
+
+// GroupAlbumsByGenre partitions albums into curated genre buckets.
+func GroupAlbumsByGenre(albums []Album) map[string][]Album {
+	out := make(map[string][]Album)
+	for _, al := range albums {
+		b := ClassifyGenre(albumGenre(al))
+		out[b] = append(out[b], al)
+	}
+	return out
+}
+
 // ---------- Selection ----------
 
 // Track is a chosen song ready to be fetched and announced.
@@ -306,9 +390,8 @@ type Track struct {
 	Suffix   string
 }
 
-// SelectTracks picks up to n tracks: shuffle the year's albums (preferring
-// albums not in excludeAlbums and deduplicating by artist), then pick the
-// "most famous" track per album via Last.fm -> highest PlayCount -> first track.
+// SelectTracks fetches the year's albums and picks up to n tracks with no genre
+// filter (the "mix" selection).
 func SelectTracks(ctx context.Context, nd *Navidrome, lf *LastFM, year, n int, excludeAlbums map[string]bool) ([]Track, error) {
 	albums, err := nd.AlbumsByYear(ctx, year, 500)
 	if err != nil {
@@ -316,6 +399,17 @@ func SelectTracks(ctx context.Context, nd *Navidrome, lf *LastFM, year, n int, e
 	}
 	if len(albums) == 0 {
 		return nil, fmt.Errorf("no albums found for year %d", year)
+	}
+	return SelectTracksFromAlbums(ctx, nd, lf, albums, n, excludeAlbums)
+}
+
+// SelectTracksFromAlbums picks up to n tracks from a pre-fetched album pool:
+// shuffle (preferring albums not in excludeAlbums and deduplicating by artist),
+// then pick the "most famous" track per album via Last.fm -> highest PlayCount
+// -> first track. The input slice is shuffled in place.
+func SelectTracksFromAlbums(ctx context.Context, nd *Navidrome, lf *LastFM, albums []Album, n int, excludeAlbums map[string]bool) ([]Track, error) {
+	if len(albums) == 0 {
+		return nil, fmt.Errorf("no albums available")
 	}
 
 	rand.Shuffle(len(albums), func(i, j int) { albums[i], albums[j] = albums[j], albums[i] })
@@ -432,14 +526,7 @@ func sortAlbumSongs(songs []Song) []Song {
 }
 
 func toTrack(al Album, s Song) Track {
-	genre := al.Genre
-	if len(al.Genres) > 0 {
-		if al.Genres[0].Name != "" {
-			genre = al.Genres[0].Name
-		} else if al.Genres[0].Value != "" {
-			genre = al.Genres[0].Value
-		}
-	}
+	genre := albumGenre(al)
 	year := al.Year
 	if year == 0 {
 		year = s.Year
