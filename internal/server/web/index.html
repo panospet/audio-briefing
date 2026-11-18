@@ -1,49 +1,193 @@
 <!DOCTYPE html>
-<html lang="el">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Daily Audio Briefing</title>
+  <meta name="theme-color" content="#10120f">
+  <meta name="description" content="Your personal daily briefing. Essential news and new music, composed into one continuous audio edition.">
+  <title>NŌEMA — Daily Audio Briefing</title>
+  <link rel="icon" href="/static/assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="site-header">
-    <div class="brand">
-      <span class="brand-icon" aria-hidden="true">🎧</span>
-      <h1>Daily Audio Briefing</h1>
-    </div>
-    <div class="controls-row">
-      <select id="briefing-select" title="Επιλογή briefing"></select>
-      <button id="generate-btn" title="Δημιουργία νέου briefing">⟳ Generate now</button>
+  <a class="skip-link" href="#edition">Skip to briefing</a>
+
+  <svg class="svg-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="icon-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></symbol>
+    <symbol id="icon-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zm6 0h4v14h-4z" fill="currentColor"/></symbol>
+    <symbol id="icon-prev" viewBox="0 0 24 24"><path d="M6 5h2v14H6zm3 7 10-7v14z" fill="currentColor"/></symbol>
+    <symbol id="icon-next" viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM5 5l10 7-10 7z" fill="currentColor"/></symbol>
+    <symbol id="icon-volume" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zm12.5-.5a5 5 0 0 1 0 7M19 6a9 9 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-news" viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-intro" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="13" rx="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="icon-music" viewBox="0 0 24 24"><path d="M9 18V6l10-2v12M9 9l10-2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6" cy="18" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="16" cy="16" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-external" viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-9 9M18 13v6H5V6h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  </svg>
+
+  <div class="ambient" aria-hidden="true"><span></span><span></span></div>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="Nōema home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="brand-word">NŌEMA<small>PERSONAL RADIO</small></span>
+      </a>
+
+      <div class="live-stamp" aria-label="Broadcasting daily">
+        <span class="live-dot"></span>
+        <span>DAILY SIGNAL</span>
+        <span class="live-number">08 / 20</span>
+      </div>
+
+      <div class="header-actions">
+        <a id="podcast-link" class="podcast-link" href="/podcast" aria-label="Podcast edition">
+          <svg class="icon" aria-hidden="true"><use href="#icon-intro"></use></svg>
+          <span>PODCAST</span>
+        </a>
+        <label class="archive-picker" for="briefing-select">
+          <span>ARCHIVE</span>
+          <select id="briefing-select" title="Select a briefing" aria-label="Select a briefing">
+            <option value="">Loading editions…</option>
+          </select>
+          <svg class="icon picker-chevron" aria-hidden="true"><use href="#icon-chevron"></use></svg>
+        </label>
+      </div>
     </div>
   </header>
 
-  <main>
-    <nav id="genre-bar" class="genre-bar" aria-label="Music genre"></nav>
-    <section id="player" class="player" aria-label="Now playing">
-      <div id="now-playing" class="now-playing muted">—</div>
-      <div class="player-controls">
-        <button id="prev" title="Προηγούμενο" aria-label="Previous">⏮</button>
-        <button id="play" title="Αναπαραγωγή/Παύση" aria-label="Play/Pause">▶</button>
-        <button id="next" title="Επόμενο" aria-label="Next">⏭</button>
-        <div class="seek-wrap">
-          <span id="time" class="time">0:00</span>
-          <input type="range" id="seek" min="0" max="100" step="0.1" value="0" aria-label="Seek">
-          <span id="total" class="time">0:00</span>
-        </div>
-        <div class="volume-wrap">
-          <span aria-hidden="true">🔊</span>
-          <input type="range" id="volume" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+  <main class="shell" id="edition">
+    <section class="hero" aria-labelledby="hero-title">
+      <img class="hero-art" src="/static/assets/signal-hero.svg" alt="" fetchpriority="high">
+      <div class="hero-shade" aria-hidden="true"></div>
+      <div class="hero-content">
+        <div class="eyebrow"><span class="eyebrow-line"></span><span id="briefing-kicker">YOUR DAILY EDITION</span></div>
+        <h1 id="hero-title">Stay curious.<br><em>Sound informed.</em></h1>
+        <p class="hero-copy">The stories that matter, the music you haven’t met yet. One considered soundtrack for your day.</p>
+        <div class="hero-actions">
+          <button id="hero-play" class="hero-play" type="button">
+            <span class="hero-play-icon"><svg class="icon" aria-hidden="true"><use id="hero-play-icon" href="#icon-play"></use></svg></span>
+            <span id="hero-play-label">Start listening</span>
+            <svg class="icon hero-arrow" aria-hidden="true"><use href="#icon-arrow"></use></svg>
+          </button>
+          <div class="hero-edition">
+            <span id="briefing-date">Loading your latest edition</span>
+            <strong id="briefing-slot">NEWS · MUSIC · TWO MINUTES FROM NOW</strong>
+          </div>
         </div>
       </div>
+      <div class="hero-art-caption" aria-hidden="true"><span>FREQUENCY 01</span><span>ATHENS, GR</span></div>
     </section>
 
-    <ol id="playlist" class="playlist"></ol>
+    <section class="edition-stats" aria-label="Briefing overview">
+      <div><span class="stat-label">STORIES</span><strong id="story-count">—</strong></div>
+      <div><span class="stat-label">TOTAL RUNTIME</span><strong id="briefing-duration">—</strong></div>
+      <div><span class="stat-label">CURATED CHANNEL</span><strong id="active-genre-stat">Mix</strong></div>
+      <p>Fresh perspectives.<br>Zero doomscrolling.</p>
+    </section>
+
+    <div id="notice" class="notice" role="status" aria-live="polite" hidden>
+      <span class="notice-dot"></span><span id="notice-text"></span>
+    </div>
+
+    <div class="channel-row">
+      <div>
+        <span class="section-index">01 / CHANNELS</span>
+        <h2>Choose your frequency</h2>
+      </div>
+      <nav id="genre-bar" class="genre-bar" aria-label="Music genre"></nav>
+    </div>
+
+    <div class="content-grid">
+      <section class="stories" aria-labelledby="stories-title">
+        <div class="stories-heading">
+          <h2 id="stories-title">In this edition</h2>
+          <span>NEWS, THEN MUSIC</span>
+        </div>
+        <ol id="playlist" class="playlist"></ol>
+        <div id="empty-state" class="empty-state">
+          <img src="/static/assets/sonic-core.svg" alt="Abstract rippling sound sculpture">
+          <span class="section-index">THE AIRWAVES ARE QUIET</span>
+          <h3 id="empty-title">Your next edition is waiting.</h3>
+          <p id="empty-message">Generate a briefing to bring today’s stories and music together.</p>
+          <button id="empty-action" type="button">Create an edition <svg class="icon" aria-hidden="true"><use href="#icon-arrow"></use></svg></button>
+        </div>
+      </section>
+
+      <aside class="session-sidebar" aria-label="Current listening session">
+        <div class="session-card">
+          <div class="session-art-wrap">
+            <img id="session-art" src="/static/assets/sonic-core.svg" alt="Abstract acid-lime sound waves">
+            <span class="session-art-tag">NŌEMA® / AUDIO</span>
+            <div class="equalizer session-equalizer" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div class="session-body">
+            <span class="section-index">YOUR LISTENING SESSION</span>
+            <h3 id="session-genre">The daily mix</h3>
+            <p>A little context. A little discovery. A continuous flow from the world to your ears.</p>
+            <dl class="session-details">
+              <div><dt>Channel</dt><dd id="session-channel">Mix</dd></div>
+              <div><dt>Audio pieces</dt><dd id="session-count">—</dd></div>
+              <div><dt>Edition</dt><dd id="session-edition">—</dd></div>
+            </dl>
+          </div>
+        </div>
+
+        <div class="up-next-card">
+          <span class="section-index">UP NEXT</span>
+          <div class="up-next-row">
+            <span id="up-next-icon" class="up-next-icon"><svg class="icon" aria-hidden="true"><use href="#icon-news"></use></svg></span>
+            <div><strong id="up-next-title">Your briefing</strong><span id="up-next-subtitle">Press play to begin</span></div>
+          </div>
+        </div>
+
+        <div class="shortcuts-card">
+          <span class="section-index">KEYBOARD CONTROL</span>
+          <div><span>Play / pause</span><kbd>SPACE</kbd></div>
+          <div><span>Seek ±5 seconds</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
+          <div><span>Next / previous</span><span><kbd>N</kbd> <kbd>P</kbd></span></div>
+        </div>
+      </aside>
+    </div>
   </main>
 
-  <footer class="site-footer muted">
-    Space: play/pause · ←/→: ±5s · N/P: next/prev
+  <footer class="site-footer shell">
+    <span>NŌEMA — YOUR DAY, IN SOUND.</span>
+    <span>Curated in Athens <i></i> Made for listening</span>
   </footer>
+
+  <section id="player" class="player-dock" aria-label="Audio player">
+    <div class="player-identity">
+      <div class="player-art-wrap">
+        <img id="player-art" src="/static/assets/sonic-core.svg" alt="">
+        <div class="equalizer player-equalizer" aria-hidden="true"><i></i><i></i><i></i></div>
+      </div>
+      <div class="player-copy">
+        <span id="now-type">YOUR DAILY BRIEFING</span>
+        <strong id="now-playing">Ready when you are</strong>
+        <span id="now-subtitle">Select a story or press play</span>
+      </div>
+    </div>
+
+    <div class="player-controls">
+      <button id="prev" class="transport-btn" type="button" title="Previous (P)" aria-label="Previous"><svg class="icon" aria-hidden="true"><use href="#icon-prev"></use></svg></button>
+      <button id="play" class="play-btn" type="button" title="Play or pause (Space)" aria-label="Play"><svg class="icon" aria-hidden="true"><use id="play-icon" href="#icon-play"></use></svg></button>
+      <button id="next" class="transport-btn" type="button" title="Next (N)" aria-label="Next"><svg class="icon" aria-hidden="true"><use href="#icon-next"></use></svg></button>
+    </div>
+
+    <div class="seek-wrap">
+      <span id="time" class="time">0:00</span>
+      <input type="range" id="seek" min="0" max="100" step="0.1" value="0" aria-label="Seek">
+      <span id="total" class="time">0:00</span>
+    </div>
+
+    <div class="volume-wrap">
+      <svg class="icon" aria-hidden="true"><use href="#icon-volume"></use></svg>
+      <input type="range" id="volume" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+    </div>
+  </section>
 
   <audio id="audio" preload="none"></audio>
   <script src="/static/player.js"></script>

@@ -1,0 +1,18 @@
+# audio-briefing — standalone deployment
+# Builds the image and runs the briefing generator + web player.
+#
+# Before starting: cp .env.example .env and fill in the secrets.
+services:
+  audio-briefing:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=Europe/Athens
+      - AUDIO_BASE_DIR=/data
+      # Must bind all interfaces so the published port is reachable.
+      - AUDIO_BIND=0.0.0.0
+    ports:
+      - "${AUDIO_PORT:-8380}:${AUDIO_PORT:-8380}"
+    volumes:
+      - ./data:/data

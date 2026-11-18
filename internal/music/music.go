@@ -19,21 +19,23 @@ import (
 	"unicode"
 )
 
-// ---------- Navidrome ----------
+// ---------- Subsonic ----------
 
-// Navidrome is a minimal Subsonic API client for discovery + audio download.
-type Navidrome struct {
+// Subsonic is a minimal Subsonic API client for discovery + audio download.
+// It speaks the open Subsonic REST protocol, so it works against any
+// Subsonic-compatible server (Navidrome, Gonic, Airsonic, etc.).
+type Subsonic struct {
 	baseURL string
 	user    string
 	pass    string
 	client  *http.Client
 }
 
-func NewNavidrome(baseURL, user, pass string) *Navidrome {
-	return &Navidrome{baseURL: baseURL, user: user, pass: pass, client: &http.Client{Timeout: 180 * time.Second}}
+func NewSubsonic(baseURL, user, pass string) *Subsonic {
+	return &Subsonic{baseURL: baseURL, user: user, pass: pass, client: &http.Client{Timeout: 180 * time.Second}}
 }
 
-func (n *Navidrome) auth() url.Values {
+func (n *Subsonic) auth() url.Values {
 	salt := make([]byte, 6)
 	_, _ = cryptorand.Read(salt)
 	saltStr := hex.EncodeToString(salt)[:6]
@@ -44,7 +46,7 @@ func (n *Navidrome) auth() url.Values {
 	}
 }
 
-func (n *Navidrome) buildURL(endpoint string, params url.Values) string {
+func (n *Subsonic) buildURL(endpoint string, params url.Values) string {
 	q := n.auth()
 	for k, vs := range params {
 		for _, v := range vs {
@@ -54,7 +56,7 @@ func (n *Navidrome) buildURL(endpoint string, params url.Values) string {
 	return fmt.Sprintf("%s/rest/%s?%s", n.baseURL, endpoint, q.Encode())
 }
 
-func (n *Navidrome) get(ctx context.Context, endpoint string, params url.Values) ([]byte, error) {
+func (n *Subsonic) get(ctx context.Context, endpoint string, params url.Values) ([]byte, error) {
 	u := n.buildURL(endpoint, params)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -66,12 +68,12 @@ func (n *Navidrome) get(ctx context.Context, endpoint string, params url.Values)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("navidrome %s: status %d", endpoint, resp.StatusCode)
+		return nil, fmt.Errorf("subsonic %s: status %d", endpoint, resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
 }
 
-// Genre is a genre tag object as returned by Navidrome.
+// Genre is a genre tag object as returned by the Subsonic API.
 type Genre struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
@@ -133,16 +135,16 @@ type albumDetail struct {
 func checkSubsonicStatus(endpoint string, s subsonic) error {
 	if s.Status != "" && s.Status != "ok" {
 		if s.Error.Message != "" {
-			return fmt.Errorf("navidrome %s failed (code %d): %s", endpoint, s.Error.Code, s.Error.Message)
+			return fmt.Errorf("subsonic %s failed (code %d): %s", endpoint, s.Error.Code, s.Error.Message)
 		}
-		return fmt.Errorf("navidrome %s status %q", endpoint, s.Status)
+		return fmt.Errorf("subsonic %s status %q", endpoint, s.Status)
 	}
 	return nil
 }
 
 // AlbumsByYear returns all albums released in the given year, paging in batches
 // of pageSize until exhausted.
-func (n *Navidrome) AlbumsByYear(ctx context.Context, year, pageSize int) ([]Album, error) {
+func (n *Subsonic) AlbumsByYear(ctx context.Context, year, pageSize int) ([]Album, error) {
 	if pageSize <= 0 || pageSize > 500 {
 		pageSize = 500
 	}
@@ -177,7 +179,7 @@ func (n *Navidrome) AlbumsByYear(ctx context.Context, year, pageSize int) ([]Alb
 }
 
 // GetAlbum returns the album and its songs.
-func (n *Navidrome) GetAlbum(ctx context.Context, id string) (*Album, []Song, error) {
+func (n *Subsonic) GetAlbum(ctx context.Context, id string) (*Album, []Song, error) {
 	data, err := n.get(ctx, "getAlbum", url.Values{"id": {id}})
 	if err != nil {
 		return nil, nil, err
@@ -198,7 +200,7 @@ func (n *Navidrome) GetAlbum(ctx context.Context, id string) (*Album, []Song, er
 
 // DownloadToFile streams the original audio for songID directly to dstPath,
 // avoiding buffering full lossless files in RAM or writing to container /tmp.
-func (n *Navidrome) DownloadToFile(ctx context.Context, songID, dstPath string) error {
+func (n *Subsonic) DownloadToFile(ctx context.Context, songID, dstPath string) error {
 	u := n.buildURL("download", url.Values{"id": {songID}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
@@ -210,12 +212,12 @@ func (n *Navidrome) DownloadToFile(ctx context.Context, songID, dstPath string) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("navidrome download: status %d", resp.StatusCode)
+		return fmt.Errorf("subsonic download: status %d", resp.StatusCode)
 	}
 	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if strings.Contains(ct, "application/json") || strings.Contains(ct, "xml") {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("navidrome download returned error payload: %s", string(body))
+		return fmt.Errorf("subsonic download returned error payload: %s", string(body))
 	}
 	f, err := os.Create(dstPath)
 	if err != nil {
@@ -233,7 +235,7 @@ func (n *Navidrome) DownloadToFile(ctx context.Context, songID, dstPath string) 
 	}
 	if nBytes == 0 {
 		_ = os.Remove(dstPath)
-		return fmt.Errorf("navidrome download returned 0 bytes")
+		return fmt.Errorf("subsonic download returned 0 bytes")
 	}
 	return nil
 }
@@ -392,7 +394,7 @@ type Track struct {
 
 // SelectTracks fetches the year's albums and picks up to n tracks with no genre
 // filter (the "mix" selection).
-func SelectTracks(ctx context.Context, nd *Navidrome, lf *LastFM, year, n int, excludeAlbums map[string]bool) ([]Track, error) {
+func SelectTracks(ctx context.Context, nd *Subsonic, lf *LastFM, year, n int, excludeAlbums map[string]bool) ([]Track, error) {
 	albums, err := nd.AlbumsByYear(ctx, year, 500)
 	if err != nil {
 		return nil, err
@@ -407,7 +409,7 @@ func SelectTracks(ctx context.Context, nd *Navidrome, lf *LastFM, year, n int, e
 // shuffle (preferring albums not in excludeAlbums and deduplicating by artist),
 // then pick the "most famous" track per album via Last.fm -> highest PlayCount
 // -> first track. The input slice is shuffled in place.
-func SelectTracksFromAlbums(ctx context.Context, nd *Navidrome, lf *LastFM, albums []Album, n int, excludeAlbums map[string]bool) ([]Track, error) {
+func SelectTracksFromAlbums(ctx context.Context, nd *Subsonic, lf *LastFM, albums []Album, n int, excludeAlbums map[string]bool) ([]Track, error) {
 	if len(albums) == 0 {
 		return nil, fmt.Errorf("no albums available")
 	}
@@ -445,7 +447,7 @@ func SelectTracksFromAlbums(ctx context.Context, nd *Navidrome, lf *LastFM, albu
 	return tracks, nil
 }
 
-func pickMostFamous(ctx context.Context, nd *Navidrome, lf *LastFM, al Album) (Track, bool) {
+func pickMostFamous(ctx context.Context, nd *Subsonic, lf *LastFM, al Album) (Track, bool) {
 	album, songs, err := nd.GetAlbum(ctx, al.ID)
 	if err != nil || len(songs) == 0 {
 		return Track{}, false

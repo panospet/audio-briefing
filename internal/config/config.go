@@ -23,9 +23,9 @@ type Config struct {
 	DashboardURL       string
 	AuthUsername       string
 	AuthPassword       string
-	NavidromeURL       string
-	NavidromeUser      string
-	NavidromePass      string
+	SubsonicURL        string
+	SubsonicUser       string
+	SubsonicPass       string
 	LastFMAPIKey       string
 	VoiceServiceURL    string
 	TelegramToken      string
@@ -37,7 +37,7 @@ func Load() *Config {
 	return &Config{
 		Port:               envInt("AUDIO_PORT", 8380),
 		Bind:               env("AUDIO_BIND", "0.0.0.0"),
-		BaseDir:            env("AUDIO_BASE_DIR", "/media/panos/Moof/audio-briefing"),
+		BaseDir:            env("AUDIO_BASE_DIR", "/var/lib/audio-briefing"),
 		RetentionDays:      envInt("RETENTION_DAYS", 30),
 		NewsSegments:       envInt("NEWS_SEGMENTS", 10),
 		MusicTracks:        envInt("MUSIC_TRACKS", 10),
@@ -50,10 +50,10 @@ func Load() *Config {
 		DashboardURL:       strings.TrimRight(env("DASHBOARD_URL", "http://localhost:8080"), "/"),
 		AuthUsername:       env("AUTH_USERNAME", ""),
 		AuthPassword:       env("AUTH_PASSWORD", ""),
-		NavidromeURL:       strings.TrimRight(env("NAVIDROME_URL", "http://localhost:4533"), "/"),
-		NavidromeUser:      env("NAVIDROME_USER", ""),
-		NavidromePass:      env("NAVIDROME_PASS", ""),
-		LastFMAPIKey:       env("LASTFM_API_KEY", env("ND_LASTFM_APIKEY", "")),
+		SubsonicURL:        strings.TrimRight(env("SUBSONIC_URL", env("NAVIDROME_URL", "http://localhost:4533")), "/"),
+		SubsonicUser:       env("SUBSONIC_USER", env("NAVIDROME_USER", "")),
+		SubsonicPass:       env("SUBSONIC_PASS", env("NAVIDROME_PASS", "")),
+		LastFMAPIKey:       env("LASTFM_API_KEY", ""),
 		VoiceServiceURL:    strings.TrimRight(env("VOICE_SERVICE_URL", "http://127.0.0.1:8002"), "/"),
 		TelegramToken:      env("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:     env("TELEGRAM_CHAT_ID", ""),

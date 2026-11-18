@@ -78,11 +78,11 @@ type StatusSnapshot struct {
 
 // Generator runs the full pipeline: news + music -> speech + audio -> playlist.
 type Generator struct {
-	Cfg       *config.Config
-	News      *news.Client
-	Navidrome *music.Navidrome
-	LastFM    *music.LastFM
-	TTS       *tts.Client
+	Cfg      *config.Config
+	News     *news.Client
+	Subsonic *music.Subsonic
+	LastFM   *music.LastFM
+	TTS      *tts.Client
 
 	mu          sync.Mutex
 	statusMu    sync.Mutex
@@ -179,58 +179,69 @@ func (g *Generator) GenerateStarted(ctx context.Context, slot string) (pl Playli
 		newsItems = selectDiverseNews(ns)
 	}
 
+	// Music is optional: set MUSIC_TRACKS=0 to produce a news-only briefing.
+	musicEnabled := g.Cfg.MusicTracks > 0
+
 	// Music: fetch the year's albums once, then curate per genre bucket.
 	var albums []music.Album
-	if al, err := g.Navidrome.AlbumsByYear(ctx, releaseYear, 500); err != nil {
-		log.Printf("[briefing] music album fetch failed for %s: %v", slot, err)
-	} else {
-		albums = al
+	if musicEnabled {
+		if al, err := g.Subsonic.AlbumsByYear(ctx, releaseYear, 500); err != nil {
+			log.Printf("[briefing] music album fetch failed for %s: %v", slot, err)
+		} else {
+			albums = al
+		}
 	}
 
 	target := g.Cfg.NewsSegments
 	if target <= 0 {
 		target = 10
 	}
-	if g.Cfg.MusicTracks > 0 && g.Cfg.MusicTracks < target {
+	if musicEnabled && g.Cfg.MusicTracks < target {
 		target = g.Cfg.MusicTracks
 	}
 
-	if len(newsItems) == 0 || len(albums) == 0 {
-		retErr = fmt.Errorf("nothing to generate: %d news, %d albums", len(newsItems), len(albums))
+	if len(newsItems) == 0 {
+		retErr = fmt.Errorf("nothing to generate: %d news", len(newsItems))
+		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) failed: %v", date, slot, retErr))
+		return Playlist{}, retErr
+	}
+	if musicEnabled && len(albums) == 0 {
+		retErr = fmt.Errorf("music enabled but no albums found for year %d", releaseYear)
 		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) failed: %v", date, slot, retErr))
 		return Playlist{}, retErr
 	}
 
 	// Curate music per bucket (metadata only, before any TTS/download).
-	excludeAlbums := recentAlbumIDs(g.Cfg.BaseDir, 4)
-	buckets := music.GroupAlbumsByGenre(albums)
-
 	type variant struct {
 		id     string
 		label  string
 		tracks []music.Track
 	}
 	var variants []variant
-	variants = append(variants, variant{id: "mix", label: "Mix", tracks: g.selectVariantTracks(ctx, albums, target, excludeAlbums)})
-	for _, gb := range music.DefaultGenres {
-		if gb.ID == "mix" {
-			continue
+	if musicEnabled {
+		excludeAlbums := recentAlbumIDs(g.Cfg.BaseDir, 4)
+		buckets := music.GroupAlbumsByGenre(albums)
+		variants = append(variants, variant{id: "mix", label: "Mix", tracks: g.selectVariantTracks(ctx, albums, target, excludeAlbums)})
+		for _, gb := range music.DefaultGenres {
+			if gb.ID == "mix" {
+				continue
+			}
+			pool := buckets[gb.ID]
+			if len(pool) == 0 {
+				continue
+			}
+			// Skip a redundant "other" button when every album is untagged (it would
+			// just duplicate the mix).
+			if gb.ID == "other" && len(pool) == len(albums) {
+				continue
+			}
+			variants = append(variants, variant{id: gb.ID, label: gb.Label, tracks: g.selectVariantTracks(ctx, pool, target, excludeAlbums)})
 		}
-		pool := buckets[gb.ID]
-		if len(pool) == 0 {
-			continue
+		if len(variants) == 0 || len(variants[0].tracks) == 0 {
+			retErr = fmt.Errorf("music selection produced no tracks")
+			g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) failed: %v", date, slot, retErr))
+			return Playlist{}, retErr
 		}
-		// Skip a redundant "other" button when every album is untagged (it would
-		// just duplicate the mix).
-		if gb.ID == "other" && len(pool) == len(albums) {
-			continue
-		}
-		variants = append(variants, variant{id: gb.ID, label: gb.Label, tracks: g.selectVariantTracks(ctx, pool, target, excludeAlbums)})
-	}
-	if len(variants) == 0 || len(variants[0].tracks) == 0 {
-		retErr = fmt.Errorf("music selection produced no tracks")
-		g.notifyTelegram(ctx, fmt.Sprintf("⚠️ Audio Briefing (%s %s) failed: %v", date, slot, retErr))
-		return Playlist{}, retErr
 	}
 
 	finalDir := filepath.Join(g.Cfg.BaseDir, date, slot)
@@ -289,32 +300,37 @@ func (g *Generator) GenerateStarted(ctx context.Context, slot string) (pl Playli
 		return Playlist{}, retErr
 	}
 
-	// Phase 2: assemble each variant (news -> intro -> music) into its item list.
+	// Phase 2: assemble the playlist. With music, each variant interleaves
+	// news -> intro -> music; without music, the playlist is just the news clips.
 	playlist := Playlist{
 		Date:     date,
 		Slot:     slot,
 		Created:  now.Format(time.RFC3339),
-		Default:  "mix",
 		Variants: map[string][]Item{},
 	}
-	for _, v := range variants {
-		if len(v.tracks) == 0 {
-			continue
+	if musicEnabled {
+		playlist.Default = "mix"
+		for _, v := range variants {
+			if len(v.tracks) == 0 {
+				continue
+			}
+			items, err := g.assembleVariant(ctx, tmpDir, date, slot, v.id, newsClips, v.tracks, pauseBeforeTTS, &hadTTSCall, &lastTTSCall)
+			if err != nil {
+				retErr = err
+				return Playlist{}, retErr
+			}
+			if len(items) == 0 {
+				continue
+			}
+			playlist.Genres = append(playlist.Genres, GenreOption{ID: v.id, Label: v.label})
+			if v.id == "mix" {
+				playlist.Items = items
+			} else {
+				playlist.Variants[v.id] = items
+			}
 		}
-		items, err := g.assembleVariant(ctx, tmpDir, date, slot, v.id, newsClips, v.tracks, pauseBeforeTTS, &hadTTSCall, &lastTTSCall)
-		if err != nil {
-			retErr = err
-			return Playlist{}, retErr
-		}
-		if len(items) == 0 {
-			continue
-		}
-		playlist.Genres = append(playlist.Genres, GenreOption{ID: v.id, Label: v.label})
-		if v.id == "mix" {
-			playlist.Items = items
-		} else {
-			playlist.Variants[v.id] = items
-		}
+	} else {
+		playlist.Items = newsClips
 	}
 
 	if len(playlist.Items) == 0 {
@@ -369,7 +385,7 @@ func (g *Generator) selectVariantTracks(ctx context.Context, pool []music.Album,
 	if len(pool) < desired {
 		desired = len(pool)
 	}
-	ts, err := music.SelectTracksFromAlbums(ctx, g.Navidrome, g.LastFM, pool, desired, excludeAlbums)
+	ts, err := music.SelectTracksFromAlbums(ctx, g.Subsonic, g.LastFM, pool, desired, excludeAlbums)
 	if err != nil {
 		log.Printf("[briefing] music selection failed: %v", err)
 		return nil
@@ -550,7 +566,7 @@ func (g *Generator) fetchAndTranscode(ctx context.Context, tmpDir string, tr mus
 	}
 	srcPath := filepath.Join(tmpDir, fmt.Sprintf("src_%d.%s", segIdx, suffix))
 	defer os.Remove(srcPath)
-	if err := g.Navidrome.DownloadToFile(ctx, tr.SongID, srcPath); err != nil {
+	if err := g.Subsonic.DownloadToFile(ctx, tr.SongID, srcPath); err != nil {
 		return err
 	}
 	return audio.TranscodeMP3(ctx, srcPath, dst)

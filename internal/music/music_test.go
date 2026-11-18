@@ -54,7 +54,7 @@ func TestPickMostFamousPlayCountFallback(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	nd := NewNavidrome(srv.URL, "u", "p")
+	nd := NewSubsonic(srv.URL, "u", "p")
 	tr, ok := pickMostFamous(context.Background(), nd, nil, Album{ID: "alb1", Name: "Test Album", Artist: "Test Artist", Year: 2026})
 	if !ok {
 		t.Fatalf("expected track to be selected")
@@ -125,7 +125,7 @@ func TestSubsonicFailedStatusReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	nd := NewNavidrome(srv.URL, "bad", "creds")
+	nd := NewSubsonic(srv.URL, "bad", "creds")
 	_, err := nd.AlbumsByYear(context.Background(), 2026, 50)
 	if err == nil {
 		t.Fatalf("expected error on Subsonic status=failed")

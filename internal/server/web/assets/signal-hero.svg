@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
+  <title id="title">Orbital sound sculpture</title>
+  <desc id="desc">An abstract luminous radio orb with concentric rings and acid lime sound waves.</desc>
+  <defs>
+    <radialGradient id="bg" cx="72%" cy="45%" r="70%"><stop offset="0" stop-color="#2c3520"/><stop offset=".4" stop-color="#171c14"/><stop offset="1" stop-color="#0d100d"/></radialGradient>
+    <radialGradient id="orb" cx="35%" cy="27%" r="75%"><stop offset="0" stop-color="#f2ffd0"/><stop offset=".12" stop-color="#c9fa58"/><stop offset=".38" stop-color="#789a31"/><stop offset=".66" stop-color="#26331b"/><stop offset=".86" stop-color="#10160e"/><stop offset="1" stop-color="#718849"/></radialGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#edffd1" stop-opacity=".95"/><stop offset=".25" stop-color="#cfff62" stop-opacity=".3"/><stop offset=".55" stop-color="#91b44d" stop-opacity=".06"/><stop offset=".8" stop-color="#d8ff76" stop-opacity=".7"/><stop offset="1" stop-color="#f5ffe5" stop-opacity=".1"/></linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffba8f"/><stop offset=".4" stop-color="#ff7657"/><stop offset="1" stop-color="#9f3429"/></linearGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="22"/></filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="8"/></filter>
+    <filter id="grain" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feComponentTransfer><feFuncA type="table" tableValues="0 .12"/></feComponentTransfer></filter>
+    <clipPath id="orbClip"><circle cx="955" cy="430" r="228"/></clipPath>
+  </defs>
+  <rect width="1400" height="900" fill="url(#bg)"/>
+  <g opacity=".13" stroke="#d8ff75" fill="none">
+    <path d="M0 105h1400M0 225h1400M0 345h1400M0 465h1400M0 585h1400M0 705h1400M0 825h1400"/>
+    <path d="M140 0v900M340 0v900M540 0v900M740 0v900M940 0v900M1140 0v900M1340 0v900"/>
+  </g>
+  <ellipse cx="955" cy="747" rx="340" ry="48" fill="#000" opacity=".65" filter="url(#soft)"/>
+  <circle cx="955" cy="430" r="255" fill="#cfff62" opacity=".12" filter="url(#glow)"/>
+  <g fill="none" transform="rotate(-19 955 430)">
+    <ellipse cx="955" cy="430" rx="470" ry="175" stroke="url(#ring)" stroke-width="2"/>
+    <ellipse cx="955" cy="430" rx="425" ry="145" stroke="url(#ring)" stroke-width="1" opacity=".5"/>
+    <ellipse cx="955" cy="430" rx="370" ry="115" stroke="url(#ring)" stroke-width="8" opacity=".3"/>
+    <ellipse cx="955" cy="430" rx="510" ry="205" stroke="#b9e456" stroke-width=".7" stroke-dasharray="2 15" opacity=".55"/>
+  </g>
+  <circle cx="955" cy="430" r="232" fill="#0a0e09" stroke="#dfff9a" stroke-opacity=".25" stroke-width="3"/>
+  <circle cx="955" cy="430" r="228" fill="url(#orb)"/>
+  <g clip-path="url(#orbClip)" fill="none" stroke-linecap="round">
+    <path d="M670 395c95-80 150 80 245 0s150 80 245 0 150 80 245 0" stroke="#eeffc9" stroke-width="4" opacity=".7"/>
+    <path d="M670 410c95-80 150 80 245 0s150 80 245 0 150 80 245 0" stroke="#d9ff77" stroke-width="3" opacity=".6"/>
+    <path d="M670 427c95-80 150 80 245 0s150 80 245 0 150 80 245 0" stroke="#d0fa68" stroke-width="2" opacity=".48"/>
+    <path d="M670 445c95-80 150 80 245 0s150 80 245 0 150 80 245 0" stroke="#c3e65f" stroke-width="2" opacity=".38"/>
+    <path d="M670 464c95-80 150 80 245 0s150 80 245 0 150 80 245 0" stroke="#bedb65" stroke-width="2" opacity=".3"/>
+    <path d="M690 350c110-55 155 55 265 0s155 55 265 0" stroke="#fff" stroke-width="16" opacity=".09" filter="url(#soft)"/>
+    <path d="M700 545c110-45 165 45 275 0s165 45 275 0" stroke="#020402" stroke-width="30" opacity=".28" filter="url(#soft)"/>
+  </g>
+  <ellipse cx="885" cy="337" rx="96" ry="64" fill="#f4ffdd" opacity=".17" filter="url(#soft)" transform="rotate(-28 885 337)"/>
+  <circle cx="1280" cy="235" r="43" fill="#ff7657" opacity=".17" filter="url(#glow)"/>
+  <circle cx="1280" cy="235" r="25" fill="url(#coral)"/>
+  <circle cx="1272" cy="226" r="6" fill="#ffe1c9" opacity=".7"/>
+  <g fill="#d9ff78">
+    <circle cx="565" cy="317" r="3"/><circle cx="1195" cy="650" r="3"/><circle cx="752" cy="122" r="2"/><circle cx="1120" cy="104" r="2"/>
+  </g>
+  <g stroke="#d9ff78" opacity=".55"><path d="M560 292v50M535 317h50"/><path d="M1195 630v40M1175 650h40"/></g>
+  <rect width="1400" height="900" filter="url(#grain)" opacity=".28"/>
+</svg>

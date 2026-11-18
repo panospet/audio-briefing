@@ -29,11 +29,11 @@ func main() {
 	briefing.CleanupTmpDirs(cfg.BaseDir)
 
 	gen := &briefing.Generator{
-		Cfg:       cfg,
-		News:      news.NewClient(cfg.DashboardURL, cfg.AuthUsername, cfg.AuthPassword),
-		Navidrome: music.NewNavidrome(cfg.NavidromeURL, cfg.NavidromeUser, cfg.NavidromePass),
-		LastFM:    music.NewLastFM(cfg.LastFMAPIKey),
-		TTS:       tts.NewClient(cfg.VoiceServiceURL, cfg.AuthUsername, cfg.AuthPassword),
+		Cfg:      cfg,
+		News:     news.NewClient(cfg.DashboardURL, cfg.AuthUsername, cfg.AuthPassword),
+		Subsonic: music.NewSubsonic(cfg.SubsonicURL, cfg.SubsonicUser, cfg.SubsonicPass),
+		LastFM:   music.NewLastFM(cfg.LastFMAPIKey),
+		TTS:      tts.NewClient(cfg.VoiceServiceURL, cfg.AuthUsername, cfg.AuthPassword),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

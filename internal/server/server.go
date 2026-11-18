@@ -46,10 +46,12 @@ func New(cfg *config.Config, gen *briefing.Generator) *Server {
 func (s *Server) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
+	mux.HandleFunc("GET /podcast", s.handleIndex)
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/briefings", s.handleBriefings)
 	mux.HandleFunc("GET /api/briefing", s.handleBriefing)
 	mux.HandleFunc("GET /api/latest", s.handleLatest)
+	mux.HandleFunc("GET /api/podcast", s.handlePodcast)
 	mux.HandleFunc("POST /api/generate", s.handleGenerate)
 	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /audio/", s.handleAudio)
@@ -181,6 +183,44 @@ func (s *Server) handleLatest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := filepath.Join(s.Cfg.BaseDir, latest.Date, latest.Slot, "playlist.json")
+	if !s.isWithinBaseDir(target) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+		return
+	}
+	s.servePlaylist(w, target)
+}
+
+// handlePodcast serves the most recently published podcast playlist from
+// <BaseDir>/podcasts/*/playlist.json (one playlist per podcast edition).
+func (s *Server) handlePodcast(w http.ResponseWriter, r *http.Request) {
+	podcastsDir := filepath.Join(s.Cfg.BaseDir, "podcasts")
+	entries, err := os.ReadDir(podcastsDir)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no podcast published yet"})
+		return
+	}
+	var newest os.DirEntry
+	var newestMod time.Time
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if newest == nil || info.ModTime().After(newestMod) {
+			if _, err := os.Stat(filepath.Join(podcastsDir, entry.Name(), "playlist.json")); err == nil {
+				newest = entry
+				newestMod = info.ModTime()
+			}
+		}
+	}
+	if newest == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no podcast published yet"})
+		return
+	}
+	target := filepath.Join(podcastsDir, newest.Name(), "playlist.json")
 	if !s.isWithinBaseDir(target) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 		return
